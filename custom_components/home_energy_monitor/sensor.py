@@ -122,14 +122,17 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
     ),
     HomeEnergySensorDescription(
         key="eg4_metered_load_power",
-        name="EG4 metered load power",
+        name="EG4 vendor-calculated load power",
         icon="mdi:meter-electric-outline",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=0,
-        classification="Measured",
-        formula="EG4 vendor Consumption Power; excludes external Enphase correction",
+        classification="Derived",
+        formula=(
+            "EG4 vendor Consumption Power AC-bus calculation; "
+            "excludes external Enphase correction"
+        ),
         value_fn=lambda s: s.calculation.eg4_metered_load_w,
     ),
     HomeEnergySensorDescription(

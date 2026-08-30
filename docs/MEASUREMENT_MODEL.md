@@ -9,6 +9,8 @@
 
 Missing or stale required data remains unavailable. It is never silently replaced with zero.
 
+Freshness is evaluated by dependency, not with one global gate. Enphase loss makes combined solar and whole-home load unavailable, but it does not suppress an independently fresh EG4 grid-import or battery-reserve alert. Likewise, stale battery telemetry does not hide a valid whole-home load or grid reading.
+
 ## Sign conventions
 
 | Signal | Positive | Negative |

@@ -495,7 +495,7 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
               markdown(`### Live balance
 **Whole-home load** = EG4 AC + Enphase AC + signed grid − rectifier
 
-Equivalent cross-check: EG4 metered load + Enphase AC
+Equivalent cross-check: EG4 vendor-calculated load + Enphase AC
 
 ### Solar
 **Combined solar estimate** = EG4 PV DC + Enphase AC

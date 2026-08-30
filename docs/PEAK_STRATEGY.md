@@ -27,7 +27,7 @@ Trigger after the conservative forecast remains in shortfall for two minutes dur
 
 Trigger after the whole-property EG4 CT reports import at or above the editable threshold, default 5 kW, continuously for five minutes while peak is active. This is a live demand-risk signal; the SRP billed-demand sensor is delayed context only.
 
-State-transition triggers prevent minute-by-minute notification spam. Alerts use both a persistent notification and the existing family notification script.
+Each alert writes a peak-window event key to a restored `input_text` helper. State transitions provide prompt delivery, while five-minute reconciliation triggers recover safely after Home Assistant or automation restarts. The persisted key prevents minute-by-minute repeats within the same AM/PM peak window. Alerts use both a persistent notification and the existing family notification script.
 
 ## A/C policy status
 

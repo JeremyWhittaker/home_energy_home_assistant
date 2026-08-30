@@ -202,7 +202,8 @@ function helperConfig(item) {
   return config;
 }
 
-function comparableHelper(config) {
+function comparableHelper(config, domain) {
+  if (domain !== "input_number") return config;
   const { initial: _initial, ...comparable } = config;
   return comparable;
 }
@@ -220,7 +221,10 @@ export async function applyHelpers(ws, specifications) {
           throw new Error(`Helper name produced ${created.id}; expected ${specification.id}`);
         }
         changes.push({ specification, action: "create", prior: null });
-      } else if (stableString(comparableHelper(helperConfig(existing))) !== stableString(comparableHelper(specification.config))) {
+      } else if (
+        stableString(comparableHelper(helperConfig(existing), specification.domain))
+        !== stableString(comparableHelper(specification.config, specification.domain))
+      ) {
         await ws.call({
           type: `${specification.domain}/update`,
           [`${specification.domain}_id`]: specification.id,

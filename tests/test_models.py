@@ -38,7 +38,10 @@ def inputs(**changes: object) -> LiveInputs:
         "eg4_yield_lifetime_kwh": 37_600.7,
         "enphase_power_w": 3_563.0,
         "enphase_lifetime_kwh": 10_834.3,
-        "required_sources_fresh": True,
+        "model_sources_fresh": True,
+        "solar_sources_fresh": True,
+        "grid_source_fresh": True,
+        "battery_source_fresh": True,
         "average_battery_discharge_w": None,
         "p80_battery_discharge_w": None,
         "battery_sample_count": 0,
@@ -164,6 +167,38 @@ def test_exact_reserve_is_detected() -> None:
 
     assert result.battery_at_reserve is True
     assert result.battery_minutes_to_reserve == 0
+
+
+def test_stale_enphase_does_not_suppress_battery_or_grid_alerts() -> None:
+    """Independent critical feeds remain usable when solar/model data is stale."""
+    result = calculate_live(
+        inputs(
+            model_sources_fresh=False,
+            solar_sources_fresh=False,
+            battery_soc_percent=20.0,
+            grid_net_w=6_000.0,
+            on_peak=True,
+        ),
+        options(),
+    )
+
+    assert result.model_valid is False
+    assert result.combined_solar_power_w is None
+    assert result.battery_at_reserve is True
+    assert result.battery_soc_percent == 20.0
+    assert result.grid_import_w == 6_000.0
+    assert result.peak_import_risk is True
+
+
+def test_stale_battery_does_not_invalidate_whole_home_model() -> None:
+    """Whole-home load and grid remain available when only battery data is stale."""
+    result = calculate_live(inputs(battery_source_fresh=False), options())
+
+    assert result.model_valid is True
+    assert result.whole_home_load_w == 7_476.0
+    assert result.grid_export_w == 6_490.0
+    assert result.battery_soc_percent is None
+    assert result.battery_at_reserve is False
 
 
 def _row(day: int, *, state: float | None = None, change: float | None = None):

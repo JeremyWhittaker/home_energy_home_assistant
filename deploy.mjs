@@ -34,23 +34,23 @@ function parseArguments(argv) {
   return result;
 }
 
-async function ensureIntegration(client, checkOnly) {
+async function ensureIntegration(client, checkOnly, transaction) {
   let entries = await client.call({ type: "config_entries/get" });
   let matches = entries.filter((entry) => entry.domain === DOMAIN);
   if (matches.length > 1) throw new Error(`Expected at most one ${DOMAIN} config entry; found ${matches.length}`);
   if (!matches.length) {
     if (checkOnly) throw new Error(`${DOMAIN} is not configured; run the deployer without --check`);
-    const initial = await client.call({
-      type: "config_entries/flow/init",
-      handler: DOMAIN,
-      context: { source: "user" },
-      show_advanced_options: false,
+    const initial = await client.request("/api/config/config_entries/flow", {
+      method: "POST",
+      body: {
+        handler: DOMAIN,
+        show_advanced_options: false,
+      },
     });
     if (initial.type !== "form") throw new Error(`Unexpected config-flow result: ${initial.type}`);
-    const result = await client.call({
-      type: "config_entries/flow/configure",
-      flow_id: initial.flow_id,
-      user_input: {
+    const result = await client.request(`/api/config/config_entries/flow/${initial.flow_id}`, {
+      method: "POST",
+      body: {
         battery_capacity_kwh: 28,
         battery_reserve_percent: 20,
         peak_import_threshold_kw: 5,
@@ -59,8 +59,12 @@ async function ensureIntegration(client, checkOnly) {
       },
     });
     if (result.type !== "create_entry") throw new Error(`Config flow did not create an entry: ${result.type}`);
+    transaction.createdIntegrationEntryId = result.result?.entry_id ?? null;
     entries = await client.call({ type: "config_entries/get" });
     matches = entries.filter((entry) => entry.domain === DOMAIN);
+    if (matches.length === 1 && !transaction.createdIntegrationEntryId) {
+      transaction.createdIntegrationEntryId = matches[0].entry_id;
+    }
   }
   if (matches.length !== 1) throw new Error(`Could not resolve the ${DOMAIN} config entry`);
   if (!new Set(["loaded", "setup_retry"]).has(matches[0].state)) {
@@ -136,11 +140,12 @@ async function main() {
   let helperResult;
   let automationResult;
   let dashboardResult;
+  const transaction = { createdIntegrationEntryId: null };
   try {
     const user = await client.call({ type: "auth/current_user" });
     if (!user?.is_admin) throw new Error("The Home Assistant token must belong to an administrator");
     const config = await client.request("/api/config");
-    const entry = await ensureIntegration(client, args.check);
+    const entry = await ensureIntegration(client, args.check, transaction);
     const live = await getLiveModel(client);
     const candidate = buildDashboard(live.discovery);
     const automations = buildAutomations(live.discovery.entities);
@@ -204,6 +209,16 @@ async function main() {
         await result.rollback();
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError.message);
+      }
+    }
+    if (transaction.createdIntegrationEntryId) {
+      try {
+        await client.request(
+          `/api/config/config_entries/entry/${encodeURIComponent(transaction.createdIntegrationEntryId)}`,
+          { method: "DELETE" },
+        );
+      } catch (rollbackError) {
+        rollbackErrors.push(`config entry: ${rollbackError.message}`);
       }
     }
     if (rollbackErrors.length) {

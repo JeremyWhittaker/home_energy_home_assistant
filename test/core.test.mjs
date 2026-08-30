@@ -37,7 +37,7 @@ function fixture() {
 
 test("semantic discovery resolves every calculated, source, and site entity", () => {
   const discovered = discoverHomeEnergy(fixture());
-  assert.equal(Object.keys(discovered.entities).length, 54);
+  assert.equal(Object.keys(discovered.entities).length, 57);
   assert.equal(discovered.entities.peakWindow, "input_boolean.juicebox_srp_on_peak");
   assert.match(discovered.entities.combinedSolarPower, /^sensor\./);
 });
@@ -93,6 +93,8 @@ test("alert automations cover reserve, forecast, and sustained peak import witho
   const serialized = stableString(automations);
   assert.match(serialized, /script.notify_family/);
   assert.match(serialized, /00:05:00/);
+  assert.match(serialized, /input_text.set_value/);
+  assert.match(serialized, /time_pattern/);
   assert.doesNotMatch(serialized, /climate\.set_temperature/);
 });
 
@@ -133,11 +135,29 @@ class HelperSocket {
 }
 
 test("helper deployment is idempotent", async () => {
+  const latches = helperSpecifications.filter((helper) => helper.domain === "input_text");
+  assert.equal(latches.length, 3);
+  assert.equal(latches.some((helper) => "initial" in helper.config), false);
   const socket = new HelperSocket();
   const first = await applyHelpers(socket, helperSpecifications);
-  assert.equal(first.changes.length, 4);
+  assert.equal(first.changes.length, 7);
   const second = await applyHelpers(socket, helperSpecifications);
   assert.equal(second.changes.length, 0);
+});
+
+test("helper deployment removes restart-resetting initial values from alert latches", async () => {
+  const socket = new HelperSocket();
+  const legacy = helperSpecifications.map((helper) => (
+    helper.domain === "input_text"
+      ? { ...helper, config: { ...helper.config, initial: "none" } }
+      : helper
+  ));
+  await applyHelpers(socket, legacy);
+  const migrated = await applyHelpers(socket, helperSpecifications);
+  assert.equal(migrated.changes.length, 3);
+  for (const latch of helperSpecifications.filter((helper) => helper.domain === "input_text")) {
+    assert.equal("initial" in socket.items.get("input_text").get(latch.id), false);
+  }
 });
 
 test("dashboard create rollback deletes only the dashboard it created", async () => {

@@ -58,17 +58,17 @@ Automatic thermostat changes are intentionally **not armed**. The dashboard and 
 
 ## Install and deploy
 
-The Home Assistant custom-component directory is root-owned on this appliance. Run the audited privileged installer once from this repository; it stages a recoverable copy, runs Home Assistant's configuration check, and restores the prior component automatically if validation or restart fails:
-
-```bash
-./scripts/install-integration-privileged.sh
-```
-
-Then deploy the config entry, editable helpers, alert automations, and storage-mode dashboard with a Home Assistant administrator token:
+The Home Assistant custom-component directory is root-owned on this appliance. Export an administrator API token, then run the audited privileged installer once from this repository. It stages a recoverable copy, runs Home Assistant's configuration check, waits for authenticated post-restart health, and restores the prior component automatically if validation or health fails:
 
 ```bash
 export HA_BASE_URL='http://homeassistant.local:8123'
 export HA_TOKEN='your-long-lived-access-token'
+./scripts/install-integration-privileged.sh
+```
+
+Then deploy the config entry, editable helpers, alert automations, and storage-mode dashboard:
+
+```bash
 node deploy.mjs
 node deploy.mjs --check
 ```

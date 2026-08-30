@@ -29,7 +29,7 @@ node deploy.mjs --check
 
 ### Whole-home load unavailable
 
-Open Diagnostics. The integration requires fresh EG4 PV, AC, rectifier, Consumption, grid CT, battery power/SOC, and local Enphase production. A stale/missing required source or an AC-bus residual outside tolerance fails the calculation closed.
+Open Diagnostics. Whole-home load requires fresh EG4 AC, rectifier, vendor Consumption, grid CT, and local Enphase production. Combined solar separately requires EG4 PV and Enphase. A stale/missing dependent source or an AC-bus residual outside tolerance fails only that calculation closed; fresh battery and grid feeds can still drive their critical peak alerts.
 
 ### Battery ETA unavailable
 
@@ -50,6 +50,8 @@ Check that the reconciliation date is complete, has at least 20 SRP intervals, a
 ### Alert did not fire at 20%
 
 Verify the reserve binary sensor changed from off to on and the alert automation is enabled. The dedicated automation handles exact 20%; the older generic daily digest checks strictly below 20 and is not part of this strategy.
+
+Each alert also reconciles every five minutes and stores its last AM/PM peak-window key in an `input_text.home_energy_*_alert_key` helper. This recovers conditions that were already active at restart without repeating the same alert throughout the window.
 
 ## Secrets and backups
 

@@ -434,21 +434,48 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 name: self._age_minutes(entity_id, now)
                 for name, (entity_id, _) in core_sources.items()
             }
-            required_fresh = all(
-                self._fresh(entity_id, now, maximum)
-                for entity_id, maximum in core_sources.values()
-            )
             runtime = _bool_state(self._state(self.sources.eg4_runtime_data))
             connection_lost = _bool_state(self._state(self.sources.eg4_connection_lost))
-            if runtime is False or connection_lost is True:
-                required_fresh = False
+            eg4_runtime_ok = runtime is not False and connection_lost is not True
+            model_sources_fresh = eg4_runtime_ok and all(
+                self._fresh(entity_id, now, maximum)
+                for entity_id, maximum in (
+                    core_sources["EG4 AC"],
+                    core_sources["EG4 rectifier"],
+                    core_sources["EG4 metered load"],
+                    core_sources["EG4 grid CT"],
+                    core_sources["Enphase local"],
+                )
+            )
+            solar_sources_fresh = eg4_runtime_ok and all(
+                self._fresh(entity_id, now, maximum)
+                for entity_id, maximum in (
+                    core_sources["EG4 PV"],
+                    core_sources["Enphase local"],
+                )
+            )
+            grid_source_fresh = eg4_runtime_ok and self._fresh(
+                self.sources.eg4_grid_power, now, EG4_STALE_AFTER
+            )
+            battery_source_fresh = eg4_runtime_ok and all(
+                self._fresh(entity_id, now, maximum)
+                for entity_id, maximum in (
+                    core_sources["EG4 battery"],
+                    core_sources["EG4 battery SOC"],
+                )
+            )
 
             raw_battery_w = _power_w(self._state(self.sources.eg4_battery_power))
             self._update_battery_samples(now, raw_battery_w)
             average_discharge, p80_discharge, sample_count, sample_span = self._battery_window()
             battery_age = source_ages.get("EG4 battery")
             bms_allowed = _bool_state(self._state(self.sources.eg4_bms_discharge_allowed))
-            if battery_age is None or battery_age > 3.5 or bms_allowed is False:
+            if (
+                not battery_source_fresh
+                or battery_age is None
+                or battery_age > 3.5
+                or bms_allowed is False
+            ):
                 average_discharge = None
                 p80_discharge = None
 
@@ -472,7 +499,10 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                     enphase_lifetime_kwh=_energy_kwh(
                         self._state(self.sources.enphase_lifetime)
                     ),
-                    required_sources_fresh=required_fresh,
+                    model_sources_fresh=model_sources_fresh,
+                    solar_sources_fresh=solar_sources_fresh,
+                    grid_source_fresh=grid_source_fresh,
+                    battery_source_fresh=battery_source_fresh,
                     average_battery_discharge_w=average_discharge,
                     p80_battery_discharge_w=p80_discharge,
                     battery_sample_count=sample_count,
@@ -508,9 +538,15 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
             )
 
             issues: list[str] = []
-            if not required_fresh:
-                issues.append("Required EG4 or Enphase live telemetry is unavailable or stale")
-            if required_fresh and not calculation.model_valid:
+            if not model_sources_fresh:
+                issues.append("Whole-home balance sources are unavailable or stale")
+            if not solar_sources_fresh:
+                issues.append("Combined solar sources are unavailable or stale")
+            if not grid_source_fresh:
+                issues.append("The EG4 whole-property grid CT is unavailable or stale")
+            if not battery_source_fresh:
+                issues.append("Battery power or SOC telemetry is unavailable or stale")
+            if model_sources_fresh and not calculation.model_valid:
                 issues.append("The certified AC-bus balance is outside tolerance")
             if tigo_problem:
                 issues.append(
@@ -528,7 +564,13 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 if age.days > 2:
                     issues.append("SRP settled reconciliation is stale")
 
-            telemetry_healthy = required_fresh and calculation.model_valid
+            telemetry_healthy = (
+                model_sources_fresh
+                and solar_sources_fresh
+                and grid_source_fresh
+                and battery_source_fresh
+                and calculation.model_valid
+            )
             source_health = (
                 "unavailable"
                 if not telemetry_healthy

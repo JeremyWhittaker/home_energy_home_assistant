@@ -24,7 +24,10 @@ class LiveInputs:
     eg4_yield_lifetime_kwh: float | None
     enphase_power_w: float | None
     enphase_lifetime_kwh: float | None
-    required_sources_fresh: bool
+    model_sources_fresh: bool
+    solar_sources_fresh: bool
+    grid_source_fresh: bool
+    battery_source_fresh: bool
     average_battery_discharge_w: float | None
     p80_battery_discharge_w: float | None
     battery_sample_count: int
@@ -107,7 +110,7 @@ def calculate_live(
         inputs.grid_net_w,
         inputs.enphase_power_w,
     )
-    complete = inputs.required_sources_fresh and all(value is not None for value in core)
+    complete = inputs.model_sources_fresh and all(value is not None for value in core)
 
     balance_residual: float | None = None
     tolerance: float | None = None
@@ -149,7 +152,7 @@ def calculate_live(
 
     combined_solar = None
     if (
-        inputs.required_sources_fresh
+        inputs.solar_sources_fresh
         and inputs.eg4_pv_w is not None
         and inputs.enphase_power_w is not None
     ):
@@ -159,13 +162,25 @@ def calculate_live(
     if inputs.eg4_yield_lifetime_kwh is not None and inputs.enphase_lifetime_kwh is not None:
         combined_energy = inputs.eg4_yield_lifetime_kwh + inputs.enphase_lifetime_kwh
 
-    grid_import = None if inputs.grid_net_w is None else max(inputs.grid_net_w, 0.0)
-    grid_export = None if inputs.grid_net_w is None else max(-inputs.grid_net_w, 0.0)
-    battery_net = None if inputs.battery_raw_w is None else -inputs.battery_raw_w
+    grid_import = (
+        None
+        if not inputs.grid_source_fresh or inputs.grid_net_w is None
+        else max(inputs.grid_net_w, 0.0)
+    )
+    grid_export = (
+        None
+        if not inputs.grid_source_fresh or inputs.grid_net_w is None
+        else max(-inputs.grid_net_w, 0.0)
+    )
+    battery_net = (
+        None
+        if not inputs.battery_source_fresh or inputs.battery_raw_w is None
+        else -inputs.battery_raw_w
+    )
 
     available_kwh = None
     at_reserve = False
-    if inputs.battery_soc_percent is not None:
+    if inputs.battery_source_fresh and inputs.battery_soc_percent is not None:
         at_reserve = inputs.battery_soc_percent <= options.reserve_percent + 0.05
         available_kwh = max(
             0.0,
@@ -240,36 +255,30 @@ def calculate_live(
         combined_solar_power_w=combined_solar,
         combined_ac_supply_power_w=combined_ac,
         whole_home_load_w=whole_home,
-        eg4_metered_load_w=(
-            inputs.eg4_metered_load_w if inputs.required_sources_fresh else None
-        ),
-        grid_net_w=inputs.grid_net_w if inputs.required_sources_fresh else None,
-        grid_import_w=grid_import if inputs.required_sources_fresh else None,
-        grid_export_w=grid_export if inputs.required_sources_fresh else None,
-        battery_net_w=battery_net if inputs.required_sources_fresh else None,
+        eg4_metered_load_w=(inputs.eg4_metered_load_w if inputs.model_sources_fresh else None),
+        grid_net_w=inputs.grid_net_w if inputs.grid_source_fresh else None,
+        grid_import_w=grid_import,
+        grid_export_w=grid_export,
+        battery_net_w=battery_net,
         battery_soc_percent=(
-            inputs.battery_soc_percent if inputs.required_sources_fresh else None
+            inputs.battery_soc_percent if inputs.battery_source_fresh else None
         ),
-        battery_available_kwh=(available_kwh if inputs.required_sources_fresh else None),
+        battery_available_kwh=available_kwh,
         average_battery_discharge_w=(
-            average_discharge if inputs.required_sources_fresh else None
+            average_discharge if inputs.battery_source_fresh else None
         ),
-        p80_battery_discharge_w=(p80_discharge if inputs.required_sources_fresh else None),
+        p80_battery_discharge_w=(p80_discharge if inputs.battery_source_fresh else None),
         battery_sample_count=inputs.battery_sample_count,
         battery_sample_span_minutes=inputs.battery_sample_span_minutes,
-        battery_forecast_valid=forecast_valid and inputs.required_sources_fresh,
-        battery_minutes_to_reserve=(
-            minutes_to_reserve if inputs.required_sources_fresh else None
-        ),
-        battery_risk_minutes_to_reserve=(
-            risk_minutes_to_reserve if inputs.required_sources_fresh else None
-        ),
-        battery_reserve_eta=(reserve_eta if inputs.required_sources_fresh else None),
+        battery_forecast_valid=forecast_valid and inputs.battery_source_fresh,
+        battery_minutes_to_reserve=minutes_to_reserve,
+        battery_risk_minutes_to_reserve=risk_minutes_to_reserve,
+        battery_reserve_eta=reserve_eta,
         combined_solar_energy_kwh=combined_energy,
         model_balance_residual_w=balance_residual,
         model_tolerance_w=tolerance,
         model_valid=model_valid,
-        battery_at_reserve=at_reserve and inputs.required_sources_fresh,
+        battery_at_reserve=at_reserve,
         peak_forecast_shortfall=shortfall,
         peak_import_risk=import_risk,
         peak_strategy_status=peak_status,
