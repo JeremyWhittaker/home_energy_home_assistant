@@ -31,7 +31,7 @@ node deploy.mjs
 Expected objects:
 
 - one `home_energy_monitor` config entry;
-- 30 calculated/normalized sensors and 9 binary quality/risk sensors;
+- 29 calculated/normalized sensors and 9 binary quality/risk sensors;
 - four editable `input_number.home_energy_*` helpers and three persisted alert-latch helpers;
 - three `automation.home_energy_*` alert automations;
 - one storage-mode `home-energy` dashboard with six views.
