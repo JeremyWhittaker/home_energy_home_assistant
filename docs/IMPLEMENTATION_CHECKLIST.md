@@ -11,12 +11,14 @@ Status values: `implemented`, `blocked`, `deferred`, `not applicable`.
 | Use SRP net only and explain misleading usage/production channels | implemented | Hourly/daily reconciliation audit and Grid & SRP view |
 | Calculate total production and whole-home usage without inventing panel split | implemented | Balance-checked custom integration; backup/regular split explicitly unavailable |
 | Create professional unified monitoring page | implemented | Six native responsive views in `src/dashboard.mjs`; live install awaits root-owned component-path step |
+| Commission unified page on live Home Assistant | blocked | `/config/custom_components` is root-owned; run the audited privileged installer, then deploy and perform unified visual/log QA |
 | Keep EG4 as its own equipment page | implemented | Live sidebar renamed EG4 Solar & Battery; load labels corrected |
 | Verify Enphase, Tigo, SRP, and EG4 pages after unified deployment | deferred | EG4 live visual QA complete except one transient final navigation after HA restarted; full cross-page QA follows privileged integration install |
 | Alert at exact 20% reserve | implemented | Inclusive reserve calculation and reserve/peak-start automation |
 | Alert on forecast shortfall during peak | implemented | Conservative 15-minute forecast and two-minute persistent transition trigger |
 | Alert on material peak grid import | implemented | Editable 5 kW threshold and five-minute persistent transition trigger |
 | Reduce A/C demand when battery support may end | blocked | Recommendation implemented; automatic service call blocked pending zone/max/restore ownership because existing 5–8 PM automations overlap |
-| Preserve backups, rollback, idempotence, and secrets | implemented | Recoverable privileged installer, mode-0600 backup, transaction rollback, semantic discovery, tests |
+| Restore SRP context in Home Assistant | blocked | Existing SRP config entry rejects its stored credentials; reauthentication is required before settled reconciliation resumes |
+| Preserve backups, rollback, idempotence, and secrets | implemented | Recoverable privileged installer with authenticated Core/entry recovery checks, mode-0600 backup, config-entry/site transaction rollback, semantic discovery, tests |
 | Desktop/mobile light/dark visual QA and HA log inspection | deferred | EG4 representative desktop/mobile/light/dark images inspected clean; unified page requires integration install |
-| Documentation, independent verification, Git commit, and GitHub push | deferred | Documentation present; final verifier and shipment follow live commissioning or exact blocker handoff |
+| Documentation, independent verification, Git commit, and GitHub push | implemented | Final independent GO with no blocker/high/medium code issue; all task-owned commits pushed to GitHub; exact live-install blocker documented |
