@@ -1,0 +1,34 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Home Energy Monitor is already configured."
+    },
+    "step": {
+      "user": {
+        "title": "Configure Home Energy Monitor",
+        "description": "Tune the battery forecast and live peak-import warning.",
+        "data": {
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "battery_reserve_percent": "Battery reserve (%)",
+          "peak_import_threshold_kw": "Peak import warning (kW)",
+          "planning_discharge_kw": "Conservative planning load (kW)",
+          "minimum_discharge_kw": "Minimum discharge for ETA (kW)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Home Energy forecast settings",
+        "data": {
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "battery_reserve_percent": "Battery reserve (%)",
+          "peak_import_threshold_kw": "Peak import warning (kW)",
+          "planning_discharge_kw": "Conservative planning load (kW)",
+          "minimum_discharge_kw": "Minimum discharge for ETA (kW)"
+        }
+      }
+    }
+  }
+}

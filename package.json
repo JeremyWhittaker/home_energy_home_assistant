@@ -1,0 +1,14 @@
+{
+  "name": "home-energy-home-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "dashboard": "node scripts/dashboard.mjs",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

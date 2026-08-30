@@ -1,0 +1,34 @@
+[project]
+name = "home-energy-home-assistant"
+version = "0.1.0"
+description = "Whole-home solar, battery, grid, and peak-demand model for Home Assistant"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Jeremy Whittaker" }]
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+  "pytest-homeassistant-custom-component==0.13.205",
+  "ruff>=0.16.0,<0.17.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 96
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

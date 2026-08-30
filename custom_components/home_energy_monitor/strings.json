@@ -1,0 +1,41 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Home Energy Monitor is already configured."
+    },
+    "step": {
+      "user": {
+        "title": "Configure Home Energy Monitor",
+        "description": "These values tune the battery forecast and live peak-import warning. The dashboard creates editable helpers with the same defaults.",
+        "data": {
+          "battery_capacity_kwh": "Battery capacity",
+          "battery_reserve_percent": "Battery reserve",
+          "peak_import_threshold_kw": "Peak import warning",
+          "planning_discharge_kw": "Conservative planning load",
+          "minimum_discharge_kw": "Minimum discharge for ETA"
+        },
+        "data_description": {
+          "battery_capacity_kwh": "Usable bank capacity in kWh (recent cycles support approximately 28 kWh).",
+          "battery_reserve_percent": "The inverter's on-grid floor, currently 20%.",
+          "peak_import_threshold_kw": "Sustained on-peak import that should produce an alert.",
+          "planning_discharge_kw": "Conservative battery draw used before the rolling forecast is fully representative.",
+          "minimum_discharge_kw": "Do not claim an ETA below this discharge rate."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Home Energy forecast settings",
+        "data": {
+          "battery_capacity_kwh": "Battery capacity",
+          "battery_reserve_percent": "Battery reserve",
+          "peak_import_threshold_kw": "Peak import warning",
+          "planning_discharge_kw": "Conservative planning load",
+          "minimum_discharge_kw": "Minimum discharge for ETA"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "domain": "home_energy_monitor",
+  "name": "Home Energy Monitor",
+  "codeowners": ["@JeremyWhittaker"],
+  "config_flow": true,
+  "documentation": "https://github.com/JeremyWhittaker/home_energy_home_assistant",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/JeremyWhittaker/home_energy_home_assistant/issues",
+  "loggers": ["custom_components.home_energy_monitor"],
+  "requirements": [],
+  "version": "0.1.0"
+}
