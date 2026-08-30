@@ -5,6 +5,8 @@ import { accessSync, constants } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { waitForHomeAssistant } from "./wait-for-home-assistant.mjs";
+
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = resolve(repository, "custom_components/home_energy_monitor");
 const host = process.env.HA_SSH_HOST ?? "homeassistant-ha";
@@ -32,31 +34,20 @@ function remoteExists(path) {
   return run("ssh", [host, "test", "-d", path], { allowFailure: true, quiet: true }).status === 0;
 }
 
-async function waitForHomeAssistant() {
-  const baseUrl = String(process.env.HA_BASE_URL ?? "").replace(/\/$/, "");
-  const token = process.env.HA_TOKEN;
-  if (!baseUrl || !token) throw new Error("Set HA_BASE_URL and HA_TOKEN so restart health can be verified");
-  const deadline = Date.now() + 180_000;
-  let lastError;
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 5_000));
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`${baseUrl}/api/config`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (response.ok) return response.json();
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000));
-  }
-  throw new Error(`Home Assistant did not become healthy after restart: ${lastError?.message ?? "timeout"}`);
-}
-
 async function main() {
   accessSync(source, constants.R_OK);
+  const preflight = await waitForHomeAssistant({
+    timeoutMs: 15_000,
+    entryDomain: "home_energy_monitor",
+    allowMissingEntry: true,
+  });
+  const entryHealthRequired = preflight.entryStatus === "loaded";
+  const verifyPostRestart = () => waitForHomeAssistant({
+    timeoutMs: 180_000,
+    initialDelayMs: 10_000,
+    entryDomain: entryHealthRequired ? "home_energy_monitor" : "",
+    allowMissingEntry: false,
+  });
   const hadPrior = remoteExists(target);
   let activated = false;
   try {
@@ -75,8 +66,8 @@ async function main() {
     activated = true;
     run("ssh", [host, "ha", "core", "check"]);
     run("ssh", [host, "ha", "core", "restart"]);
-    const config = await waitForHomeAssistant();
-    console.log(`integration-install-ok ha=${config.version} component=${target} prior=${hadPrior ? backup : "none"}`);
+    const health = await verifyPostRestart();
+    console.log(`integration-install-ok ha=${health.version} component=${target} prior=${hadPrior ? backup : "none"}`);
   } catch (error) {
     const rollbackErrors = [];
     try {
@@ -85,7 +76,7 @@ async function main() {
       if (hadPrior && remoteExists(backup)) run("ssh", [host, "mv", backup, target]);
       if (activated) {
         run("ssh", [host, "ha", "core", "restart"]);
-        await waitForHomeAssistant();
+        await verifyPostRestart();
       }
     } catch (rollbackError) {
       rollbackErrors.push(rollbackError.message);

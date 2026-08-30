@@ -19,8 +19,8 @@ The installer:
 3. Uses `sudo` only for the root-owned Home Assistant component path and Core check/restart.
 4. Moves any prior component to a timestamped backup.
 5. Runs `ha core check` before restart.
-6. Waits up to three minutes for authenticated `/api/config` health after restart.
-7. Restores the prior directory on validation/health failure, restarts again, verifies recovery, and retains the failed copy for inspection.
+6. Waits up to three minutes for authenticated `/api/config` health after restart and, on an upgrade, requires the pre-existing `home_energy_monitor` config entry to return to `loaded`.
+7. Restores the prior directory on validation/entry-health failure, restarts again, verifies both Core and prior-entry recovery, and retains the failed copy for inspection.
 
 ## 2. Deploy the Home Assistant objects
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { waitForHomeAssistant } from "../scripts/wait-for-home-assistant.mjs";
 import { buildDashboard, dashboardMetadata } from "../src/dashboard.mjs";
 import {
   applyDashboard,
@@ -182,4 +183,42 @@ test("dashboard create rollback deletes only the dashboard it created", async ()
     "lovelace/config/save",
     "lovelace/dashboards/delete",
   ]);
+});
+
+test("restart health distinguishes first install from a loaded config-entry upgrade", async () => {
+  let entries = [];
+  const fetchImpl = async (url) => {
+    const path = new URL(url).pathname;
+    const value = path === "/api/config" ? { version: "2026.8.3" } : entries;
+    return new Response(JSON.stringify(value), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const options = {
+    baseUrl: "http://home-assistant.test",
+    token: "test-token",
+    timeoutMs: 20,
+    retryDelayMs: 0,
+    entryDomain: "home_energy_monitor",
+    fetchImpl,
+  };
+
+  const firstInstall = await waitForHomeAssistant({ ...options, allowMissingEntry: true });
+  assert.equal(firstInstall.entryStatus, "absent");
+
+  await assert.rejects(
+    waitForHomeAssistant({ ...options, allowMissingEntry: false }),
+    /required home_energy_monitor config entry is missing/,
+  );
+
+  entries = [{ domain: "home_energy_monitor", state: "setup_error" }];
+  await assert.rejects(
+    waitForHomeAssistant({ ...options, allowMissingEntry: false }),
+    /config entry is setup_error, not loaded/,
+  );
+
+  entries = [{ domain: "home_energy_monitor", state: "loaded" }];
+  const upgrade = await waitForHomeAssistant({ ...options, allowMissingEntry: false });
+  assert.equal(upgrade.entryStatus, "loaded");
 });

@@ -58,7 +58,7 @@ Automatic thermostat changes are intentionally **not armed**. The dashboard and 
 
 ## Install and deploy
 
-The Home Assistant custom-component directory is root-owned on this appliance. Export an administrator API token, then run the audited privileged installer once from this repository. It stages a recoverable copy, runs Home Assistant's configuration check, waits for authenticated post-restart health, and restores the prior component automatically if validation or health fails:
+The Home Assistant custom-component directory is root-owned on this appliance. Export an administrator API token, then run the audited privileged installer once from this repository. It stages a recoverable copy, runs Home Assistant's configuration check, waits for authenticated post-restart health, requires any pre-existing Home Energy config entry to return to `loaded`, and restores the prior component automatically if validation or health fails:
 
 ```bash
 export HA_BASE_URL='http://homeassistant.local:8123'

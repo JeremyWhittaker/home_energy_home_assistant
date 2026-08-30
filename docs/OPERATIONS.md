@@ -15,7 +15,7 @@ Every model entity includes `classification`, `calculation_version`, and `measur
 
 ## Safe redeployment
 
-Run the component installer only when Python integration code changed. It preserves the previous component at a timestamped hidden directory under `/config/custom_components`.
+Run the component installer only when Python integration code changed. It preserves the previous component at a timestamped hidden directory under `/config/custom_components`. For an upgrade, success requires both authenticated Core health and the existing Home Energy config entry returning to `loaded`; otherwise the installer restores the prior component and verifies recovery.
 
 Run `node deploy.mjs` for dashboard/helper/automation changes. Before mutation it writes a private backup under `/tmp/home-energy-ha-*/backup.json`; deployment is idempotent and automatically restores site objects changed in the current run if a later verification fails.
 
