@@ -5,8 +5,10 @@
   "type": "module",
   "description": "Audited whole-home EG4, Enphase, Tigo, battery, grid, and SRP monitoring for Home Assistant",
   "scripts": {
-    "check": "node --check deploy.mjs && node --check scripts/install-integration.mjs && node --check src/dashboard.mjs && node --check src/deployer.mjs && node --check src/discovery.mjs && node --check src/ha-client.mjs && node --check src/site-config.mjs && node --test && python -m compileall -q custom_components tests && ruff check . && pytest -q",
-    "test": "node --test && pytest -q",
+    "check": "node --check deploy.mjs && node --check scripts/install-integration.mjs && node --check src/dashboard.mjs && node --check src/deployer.mjs && node --check src/discovery.mjs && node --check src/ha-client.mjs && node --check src/site-config.mjs && node --test",
+    "check:python": "uv run --python 3.12 --extra test ruff check . && uv run --python 3.12 --extra test pytest -q",
+    "check:all": "npm run check && npm run check:python",
+    "test": "node --test",
     "deploy": "node deploy.mjs",
     "deploy:check": "node deploy.mjs --check"
   },
