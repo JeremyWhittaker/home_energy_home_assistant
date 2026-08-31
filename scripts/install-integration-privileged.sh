@@ -51,7 +51,11 @@ verify_post_restart() {
 }
 
 tar --exclude='__pycache__' --exclude='*.pyc' -C "$source_dir" -czf "$archive" .
-scp "$archive" "$ssh_host:$remote_archive"
+echo "Transferring the component archive to $ssh_host."
+# Home Assistant's SSH add-on exposes the remote scp binary but does not
+# advertise an SFTP subsystem. OpenSSH 9 defaults scp to SFTP, so force its
+# compatible legacy transport or the server closes the channel before sudo.
+scp -O "$archive" "$ssh_host:$remote_archive"
 
 activation_status=0
 ssh -t "$ssh_host" "sudo sh -c '

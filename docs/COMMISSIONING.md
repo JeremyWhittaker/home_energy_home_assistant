@@ -15,7 +15,7 @@ Why privilege is required: `/config/custom_components` is owned by root and mode
 The installer:
 
 1. Builds a token-free archive in a local temporary file.
-2. Copies it to an explicit remote temporary path.
+2. Copies it to an explicit remote temporary path using legacy SCP transport because this appliance's SSH add-on does not advertise SFTP.
 3. Uses `sudo` only for the root-owned Home Assistant component path and Core check/restart.
 4. Moves any prior component to a timestamped backup.
 5. Runs `ha core check` before restart.
