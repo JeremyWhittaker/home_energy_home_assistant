@@ -50,7 +50,7 @@ panels + microinverters└──────> shared 240 V AC point
 - Tigo: 44 configured, 43 reporting; C4 is unavailable.
 - Enphase: the local aggregate matches the 14-inverter sum; one “Pool shade” location reports zero/cloud trouble.
 - EG4: two batteries, 560 Ah reported total, and a 20% operating reserve.
-- SRP: the Home Assistant integration currently needs credential reauthentication. Its unavailable state is surfaced rather than converted to zero.
+- SRP: the config entry is loaded and all six entities recovered Aug 30 without a credential change. A future unavailable state is surfaced rather than converted to zero.
 
 ## Important boundary
 

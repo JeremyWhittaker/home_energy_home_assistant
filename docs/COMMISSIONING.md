@@ -52,13 +52,23 @@ Then verify in the UI:
 - grid net direction matches the EG4 equipment page;
 - battery positive means discharge and negative means charge;
 - Tigo shows 43/44 and names C4 as the known outage;
-- SRP is clearly unavailable until credentials are repaired;
+- SRP shows delayed utility data without affecting live EG4 grid/battery alerts;
 - alert automations are enabled;
 - no automatic thermostat action exists.
 
-## 4. Reauthenticate SRP
+## 4. Confirm SRP health
 
-The installed SRP integration is loaded but its six entities have been unavailable since Aug 29 because SRP rejected the stored credentials. Reauthenticate the existing config entry through Home Assistant. Do not create a second account entry. After it recovers, allow at least one complete Arizona calendar day before expecting a reconciliation result.
+The Aug 28–30 SRP outage recovered without a credential change. The recorder shows the current-demand entity became unavailable at **Aug 28, 9:04 PM Arizona time** and recovered at **Aug 30, 1:46 PM**. On the Aug 30 audit:
+
+- the existing `srp_energy_monitor` config entry was `loaded`;
+- no SRP reauthentication flow existed;
+- all six SRP entities were available;
+- current demand was 6.3 kW and the feed reported data through Aug 29;
+- the live component files exactly matched the repository version.
+
+The restart removed the detailed failure log, so the original HTTP response cannot be proven after the fact. The unchanged credentials and automatic recovery rule out an ongoing bad-password condition and point to a transient SRP/API access failure. The installed SRP client treats an access-denied 403 as retryable and reserves reauthentication for an explicit 400/401 rejection.
+
+Do **not** reauthenticate merely because an SRP entity becomes temporarily unavailable. Reauthenticate the existing entry only when Home Assistant opens an SRP reauthentication flow or the SRP integration log records an explicit 400/401 credential rejection. Never create a second account entry. After any extended outage, allow one complete Arizona calendar day before expecting settled reconciliation.
 
 ## 5. Test notifications safely
 

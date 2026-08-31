@@ -41,7 +41,9 @@ The current baseline is 43 of 44 reporting with C4 down. Tigo is diagnostic only
 
 ### SRP values unavailable
 
-Repair credentials on the existing SRP config entry. Live power and battery alerts continue using the EG4 CT; only settled reconciliation and billing context are lost.
+First open **Settings → Devices & services → SRP Energy Monitor** and check the entry state, then inspect the integration log. A temporary unavailable state does not prove the password is wrong: the Aug 28–30 outage recovered with unchanged credentials. The installed client treats an access-denied 403 as retryable; only an explicit 400/401 rejection should start reauthentication.
+
+If Home Assistant has opened an SRP reauthentication flow, update the existing entry there. Otherwise leave the credentials alone and allow the four-hour poll to retry. Do not create a duplicate account entry. Live grid power and battery alerts continue using the EG4 CT while SRP is down; only delayed settlement reconciliation and billing context are unavailable.
 
 ### SRP and EG4 do not match
 

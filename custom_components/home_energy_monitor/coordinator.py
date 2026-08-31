@@ -558,7 +558,9 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
             if enphase_problem:
                 issues.append("Enphase reports a degraded gateway/service state")
             if not srp_available:
-                issues.append("SRP Home Assistant credentials require reauthentication")
+                issues.append(
+                    "SRP settled data is unavailable; check the SRP integration state and logs"
+                )
             if self._reconciliation is not None:
                 age = dt_util.as_local(now).date() - self._reconciliation.day
                 if age.days > 2:

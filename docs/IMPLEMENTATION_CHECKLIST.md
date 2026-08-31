@@ -18,7 +18,7 @@ Status values: `implemented`, `blocked`, `deferred`, `not applicable`.
 | Alert on forecast shortfall during peak | implemented | Conservative 15-minute forecast and two-minute persistent transition trigger |
 | Alert on material peak grid import | implemented | Editable 5 kW threshold and five-minute persistent transition trigger |
 | Reduce A/C demand when battery support may end | blocked | Recommendation implemented; automatic service call blocked pending zone/max/restore ownership because existing 5–8 PM automations overlap |
-| Restore SRP context in Home Assistant | blocked | Existing SRP config entry rejects its stored credentials; reauthentication is required before settled reconciliation resumes |
+| Restore SRP context in Home Assistant | implemented | The unchanged credentials recovered automatically Aug 30 at 1:46 PM Arizona time; config entry is loaded, no SRP reauth flow exists, and all six entities are available with data through Aug 29 |
 | Preserve backups, rollback, idempotence, and secrets | implemented | Recoverable privileged installer with authenticated Core/entry recovery checks, mode-0600 backup, config-entry/site transaction rollback, semantic discovery, tests |
 | Desktop/mobile light/dark visual QA and HA log inspection | deferred | EG4 representative desktop/mobile/light/dark images inspected clean; unified page requires integration install |
 | Documentation, independent verification, Git commit, and GitHub push | implemented | Final independent GO with no blocker/high/medium code issue; all task-owned commits pushed to GitHub; exact live-install blocker documented |
