@@ -258,18 +258,33 @@ test("authenticated control validates Home Assistant configuration", async () =>
 });
 
 test("authenticated control requests a Home Assistant restart", async () => {
-  let request;
+  const calls = [];
+  const client = {
+    async connect() {
+      calls.push("connect");
+    },
+    async call(command) {
+      calls.push(command);
+      return null;
+    },
+    close() {
+      calls.push("close");
+    },
+  };
   await restartHomeAssistant({
     baseUrl: "http://home-assistant.test/",
     token: "test-token",
-    fetchImpl: async (url, options) => {
-      request = { url, options };
-      return new Response("[]", {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    },
+    client,
   });
-  assert.equal(new URL(request.url).pathname, "/api/services/homeassistant/restart");
-  assert.equal(request.options.method, "POST");
+  assert.deepEqual(calls, [
+    "connect",
+    {
+      type: "call_service",
+      domain: "homeassistant",
+      service: "restart",
+      service_data: {},
+      target: {},
+    },
+    "close",
+  ]);
 });

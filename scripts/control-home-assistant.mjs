@@ -3,6 +3,8 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { HomeAssistantClient } from "../src/ha-client.mjs";
+
 function settings(options = {}) {
   const baseUrl = String(options.baseUrl ?? process.env.HA_BASE_URL ?? "").replace(/\/$/, "");
   const token = options.token ?? process.env.HA_TOKEN;
@@ -43,7 +45,29 @@ export async function checkHomeAssistantConfig(options = {}) {
 }
 
 export async function restartHomeAssistant(options = {}) {
-  await post("/api/services/homeassistant/restart", options);
+  const { baseUrl, token, timeoutMs } = settings(options);
+  const client = options.client ?? new HomeAssistantClient({ baseUrl, token, timeoutMs });
+  await client.connect();
+  try {
+    try {
+      await client.call({
+        type: "call_service",
+        domain: "homeassistant",
+        service: "restart",
+        service_data: {},
+        target: {},
+      });
+    } catch (error) {
+      // Core may close the authenticated socket before acknowledging the call.
+      // That close is direct evidence that the restart transition began; the
+      // installer independently waits for authenticated health afterward.
+      if (!String(error?.message).startsWith("Home Assistant WebSocket closed")) {
+        throw error;
+      }
+    }
+  } finally {
+    client.close();
+  }
 }
 
 async function main() {

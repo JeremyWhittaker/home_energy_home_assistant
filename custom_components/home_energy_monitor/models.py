@@ -285,8 +285,12 @@ def calculate_live(
     )
 
 
-def _local_date(timestamp_ms: int | float) -> date:
-    return datetime.fromtimestamp(float(timestamp_ms) / 1000.0, UTC).astimezone(PHOENIX).date()
+def _local_date(timestamp: int | float) -> date:
+    """Return the Arizona date for recorder seconds or WebSocket milliseconds."""
+    seconds = float(timestamp)
+    if abs(seconds) >= 100_000_000_000:
+        seconds /= 1000.0
+    return datetime.fromtimestamp(seconds, UTC).astimezone(PHOENIX).date()
 
 
 def calculate_reconciliation(

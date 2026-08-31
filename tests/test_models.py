@@ -202,7 +202,8 @@ def test_stale_battery_does_not_invalidate_whole_home_model() -> None:
 
 
 def _row(day: int, *, state: float | None = None, change: float | None = None):
-    timestamp = datetime(2026, 8, day, 7, tzinfo=UTC).timestamp() * 1000
+    # statistics_during_period() returns epoch seconds inside Home Assistant.
+    timestamp = datetime(2026, 8, day, 7, tzinfo=UTC).timestamp()
     return {"start": timestamp, "state": state, "change": change}
 
 
@@ -211,7 +212,7 @@ def test_reconciliation_uses_raw_hourly_state_not_corruptible_sum() -> None:
     phoenix_midnight_utc = datetime(2026, 8, 27, 7, tzinfo=UTC)
     srp = [
         {
-            "start": (phoenix_midnight_utc + timedelta(hours=hour)).timestamp() * 1000,
+            "start": (phoenix_midnight_utc + timedelta(hours=hour)).timestamp(),
             "state": 6.0,
             "sum": 999_999.0,
         }
@@ -230,6 +231,31 @@ def test_reconciliation_uses_raw_hourly_state_not_corruptible_sum() -> None:
     assert result.eg4_net_kwh == 144.0
     assert result.residual_kwh == 0
     assert result.matches is True
+
+
+def test_reconciliation_defensively_accepts_websocket_milliseconds() -> None:
+    """A diagnostics/API payload in milliseconds cannot collapse into 1970."""
+    midnight = datetime(2026, 8, 27, 7, tzinfo=UTC)
+    result = calculate_reconciliation(
+        srp_hourly=[
+            {
+                "start": (midnight + timedelta(hours=hour)).timestamp() * 1000,
+                "state": 1.0,
+            }
+            for hour in range(24)
+        ],
+        eg4_import_daily=[
+            {"start": midnight.timestamp() * 1000, "change": 30.0}
+        ],
+        eg4_export_daily=[
+            {"start": midnight.timestamp() * 1000, "change": 6.0}
+        ],
+        today=date(2026, 8, 30),
+    )
+
+    assert result is not None
+    assert result.day == date(2026, 8, 27)
+    assert result.residual_kwh == 0
 
 
 def test_reconciliation_rejects_partial_srp_day() -> None:
