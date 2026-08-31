@@ -63,8 +63,11 @@ rollback_component_files() {
   ssh -t "$ssh_host" "sudo sh -c '
 set -eu
 target=/config/custom_components/home_energy_monitor
-backup=/config/custom_components/.home_energy_monitor.backup-${nonce}
-failed=/config/custom_components/.home_energy_monitor.failed-${nonce}
+deployment_root=/config/.home_energy_monitor_deployments
+backup=\$deployment_root/backup-${nonce}
+failed=\$deployment_root/failed-${nonce}
+
+mkdir -p \"\$deployment_root\"
 
 if [ -e \"\$target\" ]; then
   mv \"\$target\" \"\$failed\"
@@ -86,9 +89,10 @@ activation_status=0
 ssh -t "$ssh_host" "sudo sh -c '
 set -eu
 target=/config/custom_components/home_energy_monitor
-staging=/config/custom_components/.home_energy_monitor.staging-${nonce}
-backup=/config/custom_components/.home_energy_monitor.backup-${nonce}
-failed=/config/custom_components/.home_energy_monitor.failed-${nonce}
+deployment_root=/config/.home_energy_monitor_deployments
+staging=\$deployment_root/staging-${nonce}
+backup=\$deployment_root/backup-${nonce}
+failed=\$deployment_root/failed-${nonce}
 archive=${remote_archive}
 activated=0
 
@@ -106,6 +110,7 @@ restore_on_activation_error() {
 }
 trap restore_on_activation_error 0
 
+mkdir -p \"\$deployment_root\"
 mkdir \"\$staging\"
 tar -xzf \"\$archive\" -C \"\$staging\"
 if [ -e \"\$target\" ]; then
@@ -173,4 +178,4 @@ if ! verify_post_restart; then
   exit 1
 fi
 
-echo "Home Energy Monitor installed and Home Assistant is healthy. Prior copy, if any: /config/custom_components/.home_energy_monitor.backup-${nonce}"
+echo "Home Energy Monitor installed and Home Assistant is healthy. Prior copy, if any: /config/.home_energy_monitor_deployments/backup-${nonce}"

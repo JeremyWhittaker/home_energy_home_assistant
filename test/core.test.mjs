@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -287,4 +288,13 @@ test("authenticated control requests a Home Assistant restart", async () => {
     },
     "close",
   ]);
+});
+
+test("installer keeps deployment artifacts outside custom_components", () => {
+  const installer = readFileSync(
+    new URL("../scripts/install-integration-privileged.sh", import.meta.url),
+    "utf8",
+  );
+  assert.match(installer, /\/config\/\.home_energy_monitor_deployments/);
+  assert.doesNotMatch(installer, /\/config\/custom_components\/\.home_energy_monitor/);
 });
