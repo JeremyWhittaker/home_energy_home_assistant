@@ -1,5 +1,29 @@
 # Commissioning checklist
 
+## Commissioned live state
+
+Commissioning completed on August 30, 2026. Open the installed dashboard at:
+
+- **Home Energy:** `http://172.16.106.12:8123/home-energy/whole-home`
+- **EG4 Solar & Battery:** `http://172.16.106.12:8123/eg4-energy/live`
+
+Home Assistant 2026.8.3 reports the Home Energy config entry as `loaded`. The deployed dashboard round-trips unchanged with 6 views, 109 cards, 47 referenced entities, and 5 templates. All three Home Energy alert automations are enabled.
+
+The latest complete common meter day is **August 29, 2026**:
+
+| Reading | Energy |
+| --- | ---: |
+| SRP settled net import | 128.4 kWh |
+| EG4 CT import | 144.8 kWh |
+| EG4 CT export | 17.3 kWh |
+| EG4 CT net import | 127.5 kWh |
+| EG4 minus SRP residual | -0.9 kWh |
+| Displayed tolerance | 8.105 kWh |
+
+All 24 SRP hourly intervals were present, so the reconciliation status is **match**. Model-valid, required-telemetry, SRP-available, and meter-match flags were all on after the final restart.
+
+Final visual QA covered every unified view at 1440×1000 and 390×844 in both light and dark themes: 24 cases, 58 full-page screenshots, and zero actionable browser errors. The only allowed console noise came from the pre-existing Advanced Camera Card resource outside this project. The Home Assistant log contained no `home_energy_monitor` errors.
+
 ## 1. Install the integration
 
 Run from the repository root:
@@ -11,6 +35,8 @@ export HA_TOKEN='your-long-lived-administrator-token'
 ```
 
 Why privilege is required: `/config/custom_components` is owned by root and mode 0755 on this appliance. The regular `jeremy` SSH account can read it but cannot create a new component directory.
+
+The currently installed component directory is owned by `jeremy`, so ordinary read-only checks and direct updates to existing writable files do not need privilege. The installer still uses privilege for its recoverable directory-level swap because that operation writes to the root-owned parent directory.
 
 The installer:
 

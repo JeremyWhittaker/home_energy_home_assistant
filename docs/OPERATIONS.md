@@ -15,7 +15,7 @@ Every model entity includes `classification`, `calculation_version`, and `measur
 
 ## Safe redeployment
 
-Run the component installer only when Python integration code changed. It preserves the previous component at a timestamped hidden directory under `/config/custom_components`. For an upgrade, success requires both authenticated Core health and the existing Home Energy config entry returning to `loaded`; otherwise the installer restores the prior component and verifies recovery.
+Run the component installer only when Python integration code changed. It preserves the previous component under `/config/.home_energy_monitor_deployments`, outside `/config/custom_components` so Home Assistant cannot mistake a backup for another integration. For an upgrade, success requires both authenticated Core health and the existing Home Energy config entry returning to `loaded`; otherwise the installer restores the prior component and verifies recovery.
 
 Run `node deploy.mjs` for dashboard/helper/automation changes. Before mutation it writes a private backup under `/tmp/home-energy-ha-*/backup.json`; deployment is idempotent and automatically restores site objects changed in the current run if a later verification fails.
 
@@ -60,4 +60,4 @@ Each alert also reconciles every five minutes and stores its last AM/PM peak-win
 - Keep `HA_TOKEN` in the environment only.
 - Do not commit `.env`, dashboard backups, screenshots, runtime databases, or credentials.
 - Dashboard backups intentionally include the Home Assistant base URL but never the token.
-- Component backups live on the HA appliance; review and remove old timestamped copies manually only after a stable operating period.
+- Component backups live under `/config/.home_energy_monitor_deployments` on the HA appliance; review and remove old timestamped copies manually only after a stable operating period.

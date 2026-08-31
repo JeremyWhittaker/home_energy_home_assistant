@@ -6,7 +6,9 @@ The central rule is simple: **EG4's grid CT is the live net truth at the utility
 
 ## Dashboard
 
-After commissioning, open:
+The commissioned dashboard is live at **[Home Energy](http://172.16.106.12:8123/home-energy/whole-home)**.
+
+Views:
 
 - **Whole Home:** `/home-energy/whole-home`
 - Solar Arrays: `/home-energy/solar-arrays`
@@ -15,7 +17,9 @@ After commissioning, open:
 - Peak Strategy: `/home-energy/peak-strategy`
 - Diagnostics: `/home-energy/diagnostics`
 
-The existing `/eg4-energy/live` page remains a separate equipment page named **EG4 Solar & Battery**. Enphase and Tigo keep their own detailed pages as well.
+The existing **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)** page remains a separate equipment page. Enphase and Tigo keep their own detailed pages as well.
+
+Commissioning completed on August 30, 2026. Home Assistant 2026.8.3 reports the integration loaded, all three Home Energy alert automations enabled, and the dashboard stable across all six views. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
 
 ## The system in one picture
 

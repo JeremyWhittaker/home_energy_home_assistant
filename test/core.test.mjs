@@ -291,10 +291,12 @@ test("authenticated control requests a Home Assistant restart", async () => {
 });
 
 test("installer keeps deployment artifacts outside custom_components", () => {
-  const installer = readFileSync(
-    new URL("../scripts/install-integration-privileged.sh", import.meta.url),
-    "utf8",
-  );
-  assert.match(installer, /\/config\/\.home_energy_monitor_deployments/);
-  assert.doesNotMatch(installer, /\/config\/custom_components\/\.home_energy_monitor/);
+  for (const path of [
+    "../scripts/install-integration.mjs",
+    "../scripts/install-integration-privileged.sh",
+  ]) {
+    const installer = readFileSync(new URL(path, import.meta.url), "utf8");
+    assert.match(installer, /\/config\/\.home_energy_monitor_deployments/);
+    assert.doesNotMatch(installer, /\/config\/custom_components\/\.home_energy_monitor/);
+  }
 });

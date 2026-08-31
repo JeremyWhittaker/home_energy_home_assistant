@@ -11,10 +11,11 @@ const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = resolve(repository, "custom_components/home_energy_monitor");
 const host = process.env.HA_SSH_HOST ?? "homeassistant-ha";
 const target = "/config/custom_components/home_energy_monitor";
+const deploymentRoot = "/config/.home_energy_monitor_deployments";
 const nonce = `${Date.now()}-${process.pid}`;
-const staging = `/config/custom_components/.home_energy_monitor.staging-${nonce}`;
-const backup = `/config/custom_components/.home_energy_monitor.backup-${nonce}`;
-const failed = `/config/custom_components/.home_energy_monitor.failed-${nonce}`;
+const staging = `${deploymentRoot}/staging-${nonce}`;
+const backup = `${deploymentRoot}/backup-${nonce}`;
+const failed = `${deploymentRoot}/failed-${nonce}`;
 
 function run(command, args, { allowFailure = false, quiet = false } = {}) {
   const result = spawnSync(command, args, {
@@ -51,6 +52,7 @@ async function main() {
   const hadPrior = remoteExists(target);
   let activated = false;
   try {
+    run("ssh", [host, "mkdir", "-p", deploymentRoot]);
     run("ssh", [host, "mkdir", staging]);
     run("rsync", [
       "-a",
