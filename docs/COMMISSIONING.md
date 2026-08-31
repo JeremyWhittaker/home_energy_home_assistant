@@ -16,9 +16,9 @@ The installer:
 
 1. Builds a token-free archive in a local temporary file.
 2. Copies it to an explicit remote temporary path using legacy SCP transport because this appliance's SSH add-on does not advertise SFTP.
-3. Uses `sudo` only for the root-owned Home Assistant component path and Core check/restart.
+3. Uses `sudo` only for the root-owned Home Assistant component path.
 4. Moves any prior component to a timestamped backup.
-5. Runs `ha core check` before restart.
+5. Validates configuration and requests restart through Home Assistant's authenticated API; the SSH add-on's `ha` CLI cannot access the Supervisor API from this user session.
 6. Waits up to three minutes for authenticated `/api/config` health after restart and, on an upgrade, requires the pre-existing `home_energy_monitor` config entry to return to `loaded`.
 7. Restores the prior directory on validation/entry-health failure, restarts again, verifies both Core and prior-entry recovery, and retains the failed copy for inspection.
 

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  checkHomeAssistantConfig,
+  restartHomeAssistant,
+} from "../scripts/control-home-assistant.mjs";
 import { waitForHomeAssistant } from "../scripts/wait-for-home-assistant.mjs";
 import { buildDashboard, dashboardMetadata } from "../src/dashboard.mjs";
 import {
@@ -221,4 +225,51 @@ test("restart health distinguishes first install from a loaded config-entry upgr
   entries = [{ domain: "home_energy_monitor", state: "loaded" }];
   const upgrade = await waitForHomeAssistant({ ...options, allowMissingEntry: false });
   assert.equal(upgrade.entryStatus, "loaded");
+});
+
+test("authenticated control validates Home Assistant configuration", async () => {
+  const calls = [];
+  const options = {
+    baseUrl: "http://home-assistant.test",
+    token: "test-token",
+    fetchImpl: async (url, request) => {
+      calls.push({ url, request });
+      return new Response(JSON.stringify({ result: "valid", errors: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  };
+  await checkHomeAssistantConfig(options);
+  assert.equal(new URL(calls[0].url).pathname, "/api/config/core/check_config");
+  assert.equal(calls[0].request.method, "POST");
+  assert.equal(calls[0].request.headers.Authorization, "Bearer test-token");
+
+  await assert.rejects(
+    checkHomeAssistantConfig({
+      ...options,
+      fetchImpl: async () => new Response(
+        JSON.stringify({ result: "invalid", errors: "bad config" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    }),
+    /bad config/,
+  );
+});
+
+test("authenticated control requests a Home Assistant restart", async () => {
+  let request;
+  await restartHomeAssistant({
+    baseUrl: "http://home-assistant.test/",
+    token: "test-token",
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return new Response("[]", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+  assert.equal(new URL(request.url).pathname, "/api/services/homeassistant/restart");
+  assert.equal(request.options.method, "POST");
 });
