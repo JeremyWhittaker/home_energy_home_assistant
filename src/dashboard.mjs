@@ -150,13 +150,24 @@ For each selected zone, Peak Controls snapshots the original target and applies:
 
 **new target = min(original + increase, zone cap, thermostat maximum)**
 
-- A manual or scheduled target change immediately releases that zone.
+- A manual or scheduled change to a different target immediately releases that zone.
 - Released zones are never restored or overwritten.
-- At the configured end time, actual peak end, invalid schedule, or master disable, restoration runs only for a still-owned zone whose target exactly matches the value Peak Controls applied.
+- Just before the configured end time—or at actual peak end, invalid schedule, or master disable—restoration runs only for a still-owned zone whose target exactly matches the value Peak Controls applied.
 - The controller activates at most once per local date/window, including after an automation reload.
 - Existing 6 PM, 8 PM, and 9 PM routines remain authoritative.
 
 The master is deployed **off**. Configure the rules here, review the live values, then enable it when ready.`;
+}
+
+function peakControlsAudit(e) {
+  return `## Controller audit
+
+- **Last status:** {{ states('${e.hvacControllerStatus}') if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] else 'No action recorded' }}
+- **Last handled window:** {{ states('${e.hvacControllerEventKey}') if states('${e.hvacControllerEventKey}') not in ['unknown', 'unavailable', ''] else 'None' }}
+- **SRP schedule:** {{ 'valid' if is_state('${e.peakScheduleValid}', 'on') else 'invalid or unavailable' }} · {{ 'peak active' if is_state('${e.peakWindow}', 'on') else 'off peak' }}
+- **Owned targets:** downstairs {{ states('${e.hvacEastOwned}') }}, primary bedroom {{ states('${e.hvacWestOwned}') }}, upstairs {{ states('${e.hvacUpstairsOwned}') }}
+
+These are internal safety latches and are intentionally read-only on this page.`;
 }
 
 function diagnosticsNarrative(e) {
@@ -497,11 +508,8 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
                   row(e.downstairsClimate, "Downstairs"),
                   row(e.primaryClimate, "Primary bedroom"),
                   row(e.upstairsClimate, "Upstairs"),
-                  row(e.hvacEastOwned, "Downstairs owned by Peak Controls"),
-                  row(e.hvacWestOwned, "Primary bedroom owned by Peak Controls"),
-                  row(e.hvacUpstairsOwned, "Upstairs owned by Peak Controls"),
                 ],
-                grid_options: { columns: "full", rows: 6 },
+                grid_options: { columns: "full", rows: 3 },
               },
             ],
           },
@@ -541,18 +549,7 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
                 grid_options: { columns: "full", rows: 6 },
               },
               markdown(peakControlsSafety(e)),
-              {
-                type: "entities",
-                title: "Controller audit state",
-                show_header_toggle: false,
-                entities: [
-                  row(e.hvacControllerStatus, "Last controller status"),
-                  row(e.hvacControllerEventKey, "Last handled window"),
-                  row(e.peakScheduleValid, "SRP schedule valid"),
-                  row(e.peakWindow, "SRP peak active"),
-                ],
-                grid_options: { columns: "full", rows: 4 },
-              },
+              markdown(peakControlsAudit(e)),
             ],
           },
         ],

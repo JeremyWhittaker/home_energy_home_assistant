@@ -15,11 +15,12 @@ Views:
 - Battery & Backup: `/home-energy/battery-backup`
 - Grid & SRP: `/home-energy/grid-srp`
 - Peak Strategy: `/home-energy/peak-strategy`
+- **Peak Controls:** `/home-energy/peak-controls`
 - Diagnostics: `/home-energy/diagnostics`
 
 The existing **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)** page remains a separate equipment page. Enphase and Tigo keep their own detailed pages as well.
 
-Commissioning completed on August 30, 2026. Home Assistant 2026.8.3 reports the integration loaded, all three Home Energy alert automations enabled, and the dashboard stable across all six views. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
+Initial commissioning completed on August 30, 2026. Home Assistant 2026.8.3 reports the integration loaded and the original dashboard/alert set stable. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
 
 ## The system in one picture
 
@@ -50,15 +51,20 @@ The dashboard does **not** claim separate backup-panel and regular-panel loads. 
 
 ## Alerts
 
-Three live automations notify the existing `script.notify_family` targets and create a persistent Home Assistant notification:
+Three alert automations notify the existing `script.notify_family` targets and create a persistent Home Assistant notification:
 
 1. Battery reaches the commissioned reserve, including the exact 20% floor. It also alerts if a peak window begins while the battery is already at reserve.
-2. A conservative 15-minute discharge forecast predicts reserve before the active SRP peak window ends.
-3. Whole-property grid import remains above the editable threshold—5 kW by default—for five minutes during peak.
+2. During the editable Peak Controls window, a conservative 15-minute discharge forecast predicts reserve before the active SRP peak window ends.
+3. During that window, whole-property grid import remains above the editable threshold—5 kW by default—for five minutes during peak.
 
 The forecast uses energy above reserve and the greater of recent p80 discharge or the 7 kW planning load. It fails unavailable when telemetry is stale or the sample window is too short.
 
-Automatic thermostat changes are intentionally **not armed**. The dashboard and forecast alert recommend reducing cooling demand, but three existing 5–8 PM climate routines overlap. Zones, maximum setpoint, restoration behavior, and priority must be commissioned before adding climate service calls.
+The **Peak Controls** tab contains the optional A/C demand-response policy. Its defaults are 6:00–8:00 PM, 25% SOC, a +2°F cooling-target increase, all three zones selected, and an 80°F per-zone ceiling. The master switch is deployed **off**. When enabled, it can act once per configured window when either:
+
+- the battery forecast says the bank will reach reserve before peak ends and SOC is at or below the guardrail; or
+- EG4's whole-property CT remains above the configured import threshold for five minutes.
+
+It never changes HVAC mode or turns equipment off. Each original target is saved before adjustment. A person or another automation changing a target to a different value releases that zone immediately; only a still-owned target that exactly matches the applied value can be restored. The controller releases just before its configured end, then yields to the existing 6 PM, 8 PM, and 9 PM routines.
 
 ## Install and deploy
 
@@ -77,7 +83,7 @@ node deploy.mjs
 node deploy.mjs --check
 ```
 
-The deployer discovers serial-bearing entities semantically, validates every dashboard entity and template against the live server, writes a mode-`0600` backup under `/tmp/home-energy-ha-*`, applies changes transactionally, verifies round trips, and rolls back its site-configuration changes on failure. Tokens are never written to backups.
+The deployer discovers serial-bearing entities semantically, validates every dashboard entity plus every dashboard and automation template against the live server, writes a mode-`0600` backup under `/tmp/home-energy-ha-*`, applies changes transactionally, verifies round trips, and rolls back its site-configuration changes on failure. Tokens are never written to backups.
 
 ## Development checks
 

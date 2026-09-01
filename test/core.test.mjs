@@ -15,6 +15,7 @@ import {
   stableString,
   validateAutomationTemplates,
   validateDashboard,
+  verifyCreatedHelperDefaults,
 } from "../src/deployer.mjs";
 import { discoverHomeEnergy, discoveryContract } from "../src/discovery.mjs";
 import {
@@ -24,6 +25,7 @@ import {
   peakControlDefaults,
   planZoneAdjustment,
   planZoneRestoration,
+  secondsUntilWindowEnd,
 } from "../src/peak-controls.mjs";
 import { buildAutomations, helperSpecifications } from "../src/site-config.mjs";
 
@@ -84,6 +86,20 @@ test("dashboard is native, responsive, guarded, and complete", () => {
   assert.ok(result.references.length >= 65);
   assert.equal(stableString(dashboard).includes("custom:"), false);
   assert.equal(stableString(dashboard).includes("climate.set_temperature"), false);
+  const editableRows = dashboard.views
+    .flatMap((view) => view.sections ?? [])
+    .flatMap((section) => section.cards ?? [])
+    .filter((card) => card.type === "entities")
+    .flatMap((card) => card.entities ?? [])
+    .map((entry) => entry.entity ?? entry);
+  for (const internal of [
+    discovered.entities.hvacControllerActive,
+    discovered.entities.hvacControllerEventKey,
+    discovered.entities.hvacControllerStatus,
+    discovered.entities.hvacEastOwned,
+    discovered.entities.hvacWestOwned,
+    discovered.entities.hvacUpstairsOwned,
+  ]) assert.equal(editableRows.includes(internal), false);
 });
 
 test("dashboard validation rejects missing entities and write actions", () => {
@@ -119,6 +135,48 @@ test("alert and HVAC automations are windowed, one-shot, and mode safe", () => {
   assert.match(serialized, /home_energy_hvac_controller_event_key/);
   assert.doesNotMatch(serialized, /climate\.set_hvac_mode/);
   assert.doesNotMatch(serialized, /climate\.turn_off/);
+
+  const response = automations.find((automation) => automation.id === "home_energy_peak_hvac_response").config;
+  assert.equal(response.mode, "restart");
+  assert.deepEqual(response.conditions, []);
+  assert.ok(response.triggers.some((trigger) => trigger.platform === "state"
+    && trigger.entity_id.includes(discoverHomeEnergy(fixture()).entities.hvacResponseEnabled)));
+  const activation = response.actions[0].choose[0];
+  assert.deepEqual(activation.sequence[1], {
+    action: "input_boolean.turn_on",
+    target: { entity_id: discoverHomeEnergy(fixture()).entities.hvacControllerActive },
+  });
+  assert.match(stableString(activation.conditions), />= 300/);
+  assert.match(stableString(activation.conditions), /> 60/);
+  const zoneActions = activation.sequence.filter((action) => action.choose?.[0]?.sequence
+    ?.some((step) => step.action === "climate.set_temperature"));
+  assert.equal(zoneActions.length, 3);
+  for (const action of zoneActions) {
+    const sequence = action.choose[0].sequence;
+    const ownedIndex = sequence.findIndex((step) => step.action === "input_boolean.turn_on");
+    const climateIndex = sequence.findIndex((step) => step.action === "climate.set_temperature");
+    assert.ok(ownedIndex < climateIndex);
+    assert.ok(sequence.slice(ownedIndex + 1, climateIndex).some((step) => step.condition === "state"
+      && step.entity_id === discoverHomeEnergy(fixture()).entities.hvacResponseEnabled));
+    assert.ok(sequence.slice(ownedIndex + 1, climateIndex).some((step) => step.condition === "template"
+      && step.value_template.includes("current - (previous | float)")));
+    assert.ok(sequence.slice(ownedIndex + 1, climateIndex).some((step) => step.condition === "template"
+      && step.value_template.includes("as_timestamp(window_end) - as_timestamp(now()) > 60")));
+  }
+  const finalizer = activation.sequence.at(-1);
+  const partialFallback = finalizer.default[0];
+  assert.ok(partialFallback.choose[0].conditions[0].conditions.length === 3);
+  assert.match(stableString(partialFallback.choose[0].sequence), /Release pending/);
+  assert.equal(partialFallback.default[0].action, "input_boolean.turn_off");
+
+  const release = automations.find((automation) => automation.id === "home_energy_peak_hvac_release").config;
+  assert.equal(release.actions[1].delay, "00:00:10");
+  assert.equal(release.actions[2].action, "input_boolean.turn_off");
+  assert.equal(release.actions[2].target.entity_id, discoverHomeEnergy(fixture()).entities.hvacControllerActive);
+  assert.ok(release.triggers.some((trigger) => trigger.platform === "time_pattern" && trigger.seconds === "15"));
+  const override = automations.find((automation) => automation.id === "home_energy_peak_hvac_override_guard").config;
+  assert.ok(override.triggers.some((trigger) => trigger.platform === "time_pattern" && trigger.seconds === "40"));
+  assert.match(stableString(release.conditions), /seconds_left <= 60/);
 });
 
 test("every automation template is rendered with its runtime variables before deployment", async () => {
@@ -149,6 +207,9 @@ test("peak-control time windows are start-inclusive, end-exclusive, and fail clo
   assert.equal(isTimeInWindow("01:59:00", "22:00:00", "02:00:00"), true);
   assert.equal(isTimeInWindow("02:00:00", "22:00:00", "02:00:00"), false);
   assert.equal(isTimeInWindow("18:00:00", "18:00:00", "18:00:00"), false);
+  assert.equal(secondsUntilWindowEnd("19:59:45", "18:00:00", "20:00:00"), 15);
+  assert.equal(secondsUntilWindowEnd("01:59:30", "22:00:00", "02:00:00"), 30);
+  assert.equal(secondsUntilWindowEnd("20:00:00", "18:00:00", "20:00:00"), null);
 });
 
 test("peak-control risk requires every safety gate and latches one event", () => {
@@ -234,6 +295,7 @@ class HelperSocket {
   async call(command) {
     this.calls.push(command);
     if (this.calls.length === this.failAfter) throw new Error("injected failure");
+    if (command.type === "call_service") return null;
     const [domain, action] = command.type.split("/");
     if (action === "list") return [...(this.items.get(domain)?.values() ?? [])];
     const idKey = `${domain}_id`;
@@ -241,7 +303,6 @@ class HelperSocket {
       const id = slug(command.name);
       const item = { id, ...command };
       delete item.type;
-      if (domain !== "input_text") delete item.initial;
       if (!this.items.has(domain)) this.items.set(domain, new Map());
       this.items.get(domain).set(id, item);
       return item;
@@ -264,7 +325,7 @@ class HelperSocket {
 test("helper deployment is idempotent", async () => {
   const latches = helperSpecifications.filter((helper) => helper.domain === "input_text");
   assert.equal(latches.length, 5);
-  assert.equal(latches.some((helper) => "initial" in helper.config), false);
+  assert.equal(helperSpecifications.some((helper) => "initial" in helper.config), false);
   const socket = new HelperSocket();
   const first = await applyHelpers(socket, helperSpecifications);
   assert.equal(first.changes.length, 31);
@@ -272,8 +333,18 @@ test("helper deployment is idempotent", async () => {
   assert.equal(second.changes.length, 0);
   const masterCreate = socket.calls.find((call) => call.type === "input_boolean/create"
     && call.name === "Home Energy HVAC Response Enabled");
-  assert.equal(masterCreate.initial, false);
+  assert.equal("initial" in masterCreate, false);
   assert.equal("initial" in socket.items.get("input_boolean").get("home_energy_hvac_response_enabled"), false);
+  const masterDefault = socket.calls.find((call) => call.type === "call_service"
+    && call.target?.entity_id === "input_boolean.home_energy_hvac_response_enabled");
+  assert.equal(masterDefault.service, "turn_off");
+  const startDefault = socket.calls.find((call) => call.type === "call_service"
+    && call.target?.entity_id === "input_datetime.home_energy_hvac_window_start");
+  assert.deepEqual(startDefault.service_data, { time: "18:00:00" });
+  const initializationCallCount = socket.calls.filter((call) => call.type === "call_service").length;
+  assert.equal(initializationCallCount, helperSpecifications.filter((helper) => "defaultState" in helper).length);
+  await applyHelpers(socket, helperSpecifications);
+  assert.equal(socket.calls.filter((call) => call.type === "call_service").length, initializationCallCount);
 });
 
 test("helper metadata updates never reset persisted control values", async () => {
@@ -288,18 +359,43 @@ test("helper metadata updates never reset persisted control values", async () =>
   assert.equal("initial" in updateCall, false);
 });
 
-test("helper deployment removes restart-resetting initial values from alert latches", async () => {
+test("new helper defaults are verified without constraining later homeowner values", () => {
+  const changes = helperSpecifications
+    .filter((specification) => "defaultState" in specification)
+    .map((specification) => ({ action: "create", specification }));
+  const states = changes.map(({ specification }) => ({
+    entity_id: `${specification.domain}.${specification.id}`,
+    state: specification.domain === "input_boolean"
+      ? (specification.defaultState ? "on" : "off")
+      : String(specification.defaultState),
+  }));
+  assert.equal(verifyCreatedHelperDefaults(states, changes).verified, changes.length);
+  const master = states.find((state) => state.entity_id === "input_boolean.home_energy_hvac_response_enabled");
+  master.state = "on";
+  assert.throws(() => verifyCreatedHelperDefaults(states, changes), /expected false/);
+  assert.equal(verifyCreatedHelperDefaults(states, []).verified, 0);
+});
+
+test("a failed one-time helper initialization rolls its new helper back", async () => {
+  const socket = new HelperSocket({ failAfter: 3 });
+  await assert.rejects(applyHelpers(socket, [helperSpecifications[0]]), /injected failure/);
+  assert.equal(socket.items.get("input_number")?.size ?? 0, 0);
+});
+
+test("helper deployment removes every restart-resetting legacy initial value", async () => {
   const socket = new HelperSocket();
-  const legacy = helperSpecifications.map((helper) => (
-    helper.domain === "input_text"
-      ? { ...helper, config: { ...helper.config, initial: "none" } }
-      : helper
-  ));
+  const legacy = helperSpecifications.map((helper) => ({
+    ...helper,
+    config: {
+      ...helper.config,
+      initial: helper.domain === "input_boolean" ? false : helper.domain === "input_datetime" ? "00:00:00" : 0,
+    },
+  }));
   await applyHelpers(socket, legacy);
   const migrated = await applyHelpers(socket, helperSpecifications);
-  assert.equal(migrated.changes.length, 5);
-  for (const latch of helperSpecifications.filter((helper) => helper.domain === "input_text")) {
-    assert.equal("initial" in socket.items.get("input_text").get(latch.id), false);
+  assert.equal(migrated.changes.length, helperSpecifications.length);
+  for (const helper of helperSpecifications) {
+    assert.equal("initial" in socket.items.get(helper.domain).get(helper.id), false);
   }
 });
 

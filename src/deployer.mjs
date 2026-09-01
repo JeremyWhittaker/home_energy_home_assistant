@@ -220,16 +220,37 @@ function helperConfig(item) {
   return config;
 }
 
-function comparableHelper(config, domain) {
-  if (domain === "input_text") return config;
-  const { initial: _initial, ...comparable } = config;
-  return comparable;
-}
-
-function helperUpdateConfig(config, domain) {
-  if (domain === "input_text") return config;
-  const { initial: _initial, ...update } = config;
-  return update;
+function helperDefaultStateCommand(specification) {
+  if (!("defaultState" in specification)) return null;
+  const target = { entity_id: `${specification.domain}.${specification.id}` };
+  if (specification.domain === "input_boolean") {
+    return {
+      type: "call_service",
+      domain: "input_boolean",
+      service: specification.defaultState ? "turn_on" : "turn_off",
+      service_data: {},
+      target,
+    };
+  }
+  if (specification.domain === "input_number") {
+    return {
+      type: "call_service",
+      domain: "input_number",
+      service: "set_value",
+      service_data: { value: specification.defaultState },
+      target,
+    };
+  }
+  if (specification.domain === "input_datetime") {
+    return {
+      type: "call_service",
+      domain: "input_datetime",
+      service: "set_datetime",
+      service_data: { time: specification.defaultState },
+      target,
+    };
+  }
+  throw new Error(`Unsupported default state for ${specification.domain}.${specification.id}`);
 }
 
 export async function applyHelpers(ws, specifications) {
@@ -245,14 +266,15 @@ export async function applyHelpers(ws, specifications) {
           throw new Error(`Helper name produced ${created.id}; expected ${specification.id}`);
         }
         changes.push({ specification, action: "create", prior: null });
+        const defaultStateCommand = helperDefaultStateCommand(specification);
+        if (defaultStateCommand) await ws.call(defaultStateCommand);
       } else if (
-        stableString(comparableHelper(helperConfig(existing), specification.domain))
-        !== stableString(comparableHelper(specification.config, specification.domain))
+        stableString(helperConfig(existing)) !== stableString(specification.config)
       ) {
         await ws.call({
           type: `${specification.domain}/update`,
           [`${specification.domain}_id`]: specification.id,
-          ...helperUpdateConfig(specification.config, specification.domain),
+          ...specification.config,
         });
         changes.push({ specification, action: "update", prior: helperConfig(existing) });
       }
@@ -262,6 +284,31 @@ export async function applyHelpers(ws, specifications) {
     throw error;
   }
   return { changes, rollback: () => rollbackHelpers(ws, changes) };
+}
+
+export function verifyCreatedHelperDefaults(states, changes) {
+  const byEntityId = new Map(states.map((state) => [state.entity_id, state]));
+  let verified = 0;
+  for (const change of changes) {
+    const { specification } = change;
+    if (change.action !== "create" || !("defaultState" in specification)) continue;
+    const entityId = `${specification.domain}.${specification.id}`;
+    const actual = byEntityId.get(entityId)?.state;
+    let matches = false;
+    if (specification.domain === "input_boolean") {
+      matches = actual === (specification.defaultState ? "on" : "off");
+    } else if (specification.domain === "input_number") {
+      matches = Number.isFinite(Number(actual))
+        && Math.abs(Number(actual) - Number(specification.defaultState)) <= 0.001;
+    } else if (specification.domain === "input_datetime") {
+      matches = actual === specification.defaultState;
+    }
+    if (!matches) {
+      throw new Error(`Created helper ${entityId} has state ${actual ?? "missing"}; expected ${specification.defaultState}`);
+    }
+    verified += 1;
+  }
+  return { verified };
 }
 
 async function rollbackHelpers(ws, changes) {

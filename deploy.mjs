@@ -11,6 +11,7 @@ import {
   validateAutomationTemplates,
   validateDashboard,
   validateDashboardTemplates,
+  verifyCreatedHelperDefaults,
   verifyDashboard,
 } from "./src/deployer.mjs";
 import { discoverHomeEnergy } from "./src/discovery.mjs";
@@ -186,6 +187,7 @@ async function main() {
 
     helperResult = await applyHelpers(client, helperSpecifications);
     const refreshed = await getLiveModel(client);
+    const initializedHelpers = verifyCreatedHelperDefaults(refreshed.states, helperResult.changes);
     const validation = validateDashboard(candidate, refreshed.states);
     const dashboardTemplates = await validateDashboardTemplates(client, candidate);
     const automationTemplates = await validateAutomationTemplates(client, automations);
@@ -203,7 +205,7 @@ async function main() {
     await verifyHelpers(client);
     await verifyAutomations(client, automations);
     await verifyDashboard({ ws: client, metadata: dashboardMetadata, candidate });
-    console.log(`deployment-ok ha=${config.version} entry=${entry.state} dashboard=${dashboardResult.action} views=${validation.viewCount} cards=${validation.cardCount} entities=${validation.references.length} dashboard_templates=${dashboardTemplates.templateCount} automation_templates=${automationTemplates.templateCount} helpers=${helperResult.changes.length} automations=${automationResult.changes.length}`);
+    console.log(`deployment-ok ha=${config.version} entry=${entry.state} dashboard=${dashboardResult.action} views=${validation.viewCount} cards=${validation.cardCount} entities=${validation.references.length} dashboard_templates=${dashboardTemplates.templateCount} automation_templates=${automationTemplates.templateCount} helpers=${helperResult.changes.length} initialized_helpers=${initializedHelpers.verified} automations=${automationResult.changes.length}`);
   } catch (error) {
     const rollbackErrors = [];
     for (const result of [dashboardResult, automationResult, helperResult]) {

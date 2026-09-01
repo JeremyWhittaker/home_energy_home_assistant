@@ -29,6 +29,18 @@ export function isTimeInWindow(current, start, end) {
     : currentMinutes >= startMinutes || currentMinutes < endMinutes;
 }
 
+export function secondsUntilWindowEnd(current, start, end) {
+  const currentMinutes = typeof current === "number" ? current : parseTimeMinutes(current);
+  const startMinutes = typeof start === "number" ? start : parseTimeMinutes(start);
+  const endMinutes = typeof end === "number" ? end : parseTimeMinutes(end);
+  if (![currentMinutes, startMinutes, endMinutes].every(Number.isFinite)) return null;
+  if (!isTimeInWindow(currentMinutes, startMinutes, endMinutes)) return null;
+  const remainingMinutes = endMinutes > currentMinutes
+    ? endMinutes - currentMinutes
+    : (24 * 60) - currentMinutes + endMinutes;
+  return remainingMinutes * 60;
+}
+
 export function evaluatePeakControl({
   masterEnabled,
   scheduleValid,

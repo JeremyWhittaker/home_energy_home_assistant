@@ -13,6 +13,23 @@ The most useful first checks are:
 
 Every model entity includes `classification`, `calculation_version`, and `measurement_model` attributes. Derived/estimated entities also expose their formula or forecast inputs.
 
+Configure demand response on **Home Energy → Peak Controls** (`/home-energy/peak-controls`). Editing helpers there does not require a redeploy. The automatic A/C response master is separate from the alert automations, so the page continues to forecast and alert while thermostat control is off.
+
+## Peak Controls operation
+
+Use this order when commissioning or changing the rule:
+
+1. Leave **Enable automatic A/C response** off.
+2. Set the alert/response window. The summer default is 6:00–8:00 PM; the SRP schedule must also report an active valid peak.
+3. Set the SOC guardrail and common cooling-target increase.
+4. Select participating zones and set each zone's maximum comfort temperature.
+5. Review live battery ETA, EG4 grid import, thermostat targets, and the read-only controller audit.
+6. Turn on the master only when those values are correct.
+
+Turning the master off is the normal emergency stop. If the controller is active, this cancels the response immediately, retains ownership for a ten-second settling period so any already-issued thermostat call or external override can be observed, then marks the controller inactive and performs conditional restoration. A thermostat is restored only when restoration is on and its current target still equals the value Peak Controls applied. A manual or scheduled change to a different target is preserved. The periodic release normally starts in the final 60 seconds of the configured window so exact-end routines take authority afterward.
+
+Do not edit the `home_energy_hvac_controller_*`, `home_energy_hvac_*_owned`, previous-target, or applied-target helpers from Developer Tools. They are internal ownership records. Their read-only values are summarized on the dashboard.
+
 ## Safe redeployment
 
 Run the component installer only when Python integration code changed. It preserves the previous component under `/config/.home_energy_monitor_deployments`, outside `/config/custom_components` so Home Assistant cannot mistake a backup for another integration. For an upgrade, success requires both authenticated Core health and the existing Home Energy config entry returning to `loaded`; otherwise the installer restores the prior component and verifies recovery.
@@ -54,6 +71,23 @@ Check that the reconciliation date is complete, has at least 20 SRP intervals, a
 Verify the reserve binary sensor changed from off to on and the alert automation is enabled. The dedicated automation handles exact 20%; the older generic daily digest checks strictly below 20 and is not part of this strategy.
 
 Each alert also reconciles every five minutes and stores its last AM/PM peak-window key in an `input_text.home_energy_*_alert_key` helper. This recovers conditions that were already active at restart without repeating the same alert throughout the window.
+
+### Peak Controls did not adjust a thermostat
+
+Check the controller audit on the Peak Controls tab. The expected safe skip reasons are:
+
+- master is off;
+- SRP schedule is invalid, off peak, or outside the configured control window;
+- battery forecast is not in shortfall or SOC is above the guardrail;
+- EG4 import has not remained above threshold for five continuous minutes;
+- the current date/window was already handled;
+- the zone is disabled, unavailable, not in `cool` mode, missing a numeric target, or already at its cap.
+
+### A thermostat was not restored
+
+This is normally intentional. Peak Controls restores only a zone it still owns. A person or another automation changing the target or HVAC mode releases ownership, so the later 8 PM or 9 PM routine cannot be undone. The audit status identifies an externally changed zone.
+
+If the master is off and the controller audit still says active for more than one minute, keep the master off and inspect the three owned flags plus the response/release automation traces before changing any internal helper.
 
 ## Secrets and backups
 

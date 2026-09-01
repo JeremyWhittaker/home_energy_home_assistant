@@ -7,7 +7,7 @@ Commissioning completed on August 30, 2026. Open the installed dashboard at:
 - **Home Energy:** `http://172.16.106.12:8123/home-energy/whole-home`
 - **EG4 Solar & Battery:** `http://172.16.106.12:8123/eg4-energy/live`
 
-Home Assistant 2026.8.3 reports the Home Energy config entry as `loaded`. The deployed dashboard round-trips unchanged with 6 views, 109 cards, 47 referenced entities, and 5 templates. All three Home Energy alert automations are enabled.
+Home Assistant 2026.8.3 reports the Home Energy config entry as `loaded`. The August 30 baseline dashboard round-tripped unchanged with 6 views, 109 cards, 47 referenced entities, and 5 templates. The Peak Controls expansion is commissioned separately below.
 
 The latest complete common meter day is **August 29, 2026**:
 
@@ -58,9 +58,9 @@ Expected objects:
 
 - one `home_energy_monitor` config entry;
 - 29 calculated/normalized sensors and 9 binary quality/risk sensors;
-- four editable `input_number.home_energy_*` helpers and three persisted alert-latch helpers;
-- three `automation.home_energy_*` alert automations;
-- one storage-mode `home-energy` dashboard with six views.
+- editable planning plus Peak Controls helpers and persisted alert/controller latches;
+- three `automation.home_energy_*` alert automations and three master-gated A/C ownership automations;
+- one storage-mode `home-energy` dashboard with seven views.
 
 The exact entity IDs are discovered and verified after Home Assistant creates them; the deployment does not commit serial-bearing source IDs.
 
@@ -80,7 +80,9 @@ Then verify in the UI:
 - Tigo shows 43/44 and names C4 as the known outage;
 - SRP shows delayed utility data without affecting live EG4 grid/battery alerts;
 - alert automations are enabled;
-- no automatic thermostat action exists.
+- `/home-energy/peak-controls` shows 6:00–8:00 PM, 25%, +2°F, all three selected zones, 80°F caps, and conditional restoration;
+- the automatic A/C response master is off after deployment;
+- all three thermostat target temperatures are unchanged by deployment.
 
 ## 4. Confirm SRP health
 
@@ -98,7 +100,21 @@ Do **not** reauthenticate merely because an SRP entity becomes temporarily unava
 
 ## 5. Test notifications safely
 
-Use Home Assistant's automation **Run actions** control for each new automation while watching both the persistent notification and family targets. Do not lower the live threshold solely to create a long peak import unless you intend to receive that alert.
+Use Home Assistant's automation **Run actions** control only for the three alert automations while watching both the persistent notification and family targets. Do not manually run the HVAC response, override, or release automations. Do not lower the live threshold solely to create a long peak import unless you intend to receive that alert.
+
+## 6. Commission Peak Controls
+
+Before deployment, record each climate entity's mode and target. Run `node deploy.mjs`, then verify:
+
+1. The new page is `/home-energy/peak-controls`.
+2. The master is `off` and controller active is `off`.
+3. The defaults are 6:00–8:00 PM, 25% SOC, +2°F, all zones enabled, 80°F zone caps, and restoration enabled.
+4. The three climate modes and target temperatures exactly match the pre-deployment snapshot.
+5. All generated automation and dashboard templates render through the live Home Assistant template engine.
+6. All six Home Energy automations are enabled, while climate service calls remain blocked by the master.
+7. A second `node deploy.mjs --check` round-trips helpers, automations, and the seven-view dashboard unchanged.
+
+Complete desktop/mobile light/dark visual QA before enabling the master. During the first live peak event, watch traces and confirm the controller reports only selected zones as owned. Turn the master off immediately if the live behavior differs from the documented rule.
 
 ## Acceptance criteria
 
@@ -107,4 +123,7 @@ Use Home Assistant's automation **Run actions** control for each new automation 
 - Missing Enphase or EG4 data makes dependent results unavailable, not zero.
 - The 20% condition is inclusive.
 - Peak import requires five continuous minutes.
+- Forecast/import alerts run only inside the configured window and a valid active SRP peak.
+- The HVAC master defaults off and deployment does not change climate targets.
+- Manual/scheduled target changes release ownership and are never overwritten during restoration.
 - Dashboard, helpers, and automations round-trip identically on a second deploy.
