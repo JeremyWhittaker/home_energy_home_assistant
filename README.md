@@ -20,7 +20,7 @@ Views:
 
 The existing **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)** page remains a separate equipment page. Enphase and Tigo keep their own detailed pages as well.
 
-Initial commissioning completed on August 30, 2026. Home Assistant 2026.8.3 reports the integration loaded and the original dashboard/alert set stable. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
+Initial commissioning completed on August 30, 2026, and Peak Controls was commissioned on August 31. Home Assistant 2026.8.3 reports the integration loaded and the seven-view dashboard/alert set stable. The optional thermostat controller remains off until it is explicitly enabled on the Peak Controls tab. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
 
 ## The system in one picture
 

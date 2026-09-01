@@ -7,7 +7,7 @@ Commissioning completed on August 30, 2026. Open the installed dashboard at:
 - **Home Energy:** `http://172.16.106.12:8123/home-energy/whole-home`
 - **EG4 Solar & Battery:** `http://172.16.106.12:8123/eg4-energy/live`
 
-Home Assistant 2026.8.3 reports the Home Energy config entry as `loaded`. The August 30 baseline dashboard round-tripped unchanged with 6 views, 109 cards, 47 referenced entities, and 5 templates. The Peak Controls expansion is commissioned separately below.
+Home Assistant 2026.8.3 reports the Home Energy config entry as `loaded`. The August 31 Peak Controls deployment round-tripped with 7 views, 131 cards, 65 referenced entities, 7 dashboard templates, and 80 automation templates.
 
 The latest complete common meter day is **August 29, 2026**:
 
@@ -22,7 +22,7 @@ The latest complete common meter day is **August 29, 2026**:
 
 All 24 SRP hourly intervals were present, so the reconciliation status is **match**. Model-valid, required-telemetry, SRP-available, and meter-match flags were all on after the final restart.
 
-Final visual QA covered every unified view at 1440×1000 and 390×844 in both light and dark themes: 24 cases, 58 full-page screenshots, and zero actionable browser errors. The only allowed console noise came from the pre-existing Advanced Camera Card resource outside this project. The Home Assistant log contained no `home_energy_monitor` errors.
+Final visual QA covered every unified view at 1440×1000 and 390×844 in both light and dark themes: 28 cases, 72 full-scroll screenshots, zero Lovelace error cards, and zero browser errors. Human review covered the new Peak Controls page in both themes and both viewport sizes. The Home Assistant log contained no relevant Home Energy errors.
 
 ## 1. Install the integration
 
@@ -115,6 +115,20 @@ Before deployment, record each climate entity's mode and target. Run `node deplo
 7. A second `node deploy.mjs --check` round-trips helpers, automations, and the seven-view dashboard unchanged.
 
 Complete desktop/mobile light/dark visual QA before enabling the master. During the first live peak event, watch traces and confirm the controller reports only selected zones as owned. Turn the master off immediately if the live behavior differs from the documented rule.
+
+### August 31, 2026 live result
+
+- A private transaction backup was written before mutation.
+- The deployer created 24 Peak Controls helpers and verified all 22 helpers with create-only defaults.
+- The master, controller-active flag, and all three ownership flags were `off` after deployment.
+- Defaults round-tripped as 6:00–8:00 PM, 25% SOC, +2°F, all three zones enabled, 80°F caps, and restoration enabled.
+- The three climate targets remained exactly 70°F, 70°F, and 72°F; modes, presets, and fan modes were also unchanged.
+- All six Home Energy automations were enabled. The response trace stopped at the disabled-master condition and made no climate service call.
+- A second normal deploy was idempotent: 0 helper changes, 0 automation changes, and the dashboard was unchanged.
+- `node deploy.mjs --check`, all 80 automation templates, all 7 dashboard templates, and the seven-view dashboard round-trip passed.
+- Visual QA passed 28 route/device/theme cases and 72 full-scroll screenshots with no error cards or browser errors.
+
+The automatic A/C response master intentionally remains **off**. Alerts and risk calculations continue while automatic thermostat control is disabled.
 
 ## Acceptance criteria
 
