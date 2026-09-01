@@ -8,6 +8,7 @@ import {
   createBackup,
   planDashboard,
   stableString,
+  validateAutomationTemplates,
   validateDashboard,
   validateDashboardTemplates,
   verifyDashboard,
@@ -158,11 +159,12 @@ async function main() {
 
     if (args.check) {
       const validation = validateDashboard(candidate, live.states);
-      const templates = await validateDashboardTemplates(client, candidate);
+      const dashboardTemplates = await validateDashboardTemplates(client, candidate);
+      const automationTemplates = await validateAutomationTemplates(client, automations);
       await verifyHelpers(client);
       await verifyAutomations(client, automations);
       await verifyDashboard({ ws: client, metadata: dashboardMetadata, candidate });
-      console.log(`check-ok ha=${config.version} entry=${entry.state} dashboard=${plan.action} views=${validation.viewCount} cards=${validation.cardCount} entities=${validation.references.length} templates=${templates.templateCount}`);
+      console.log(`check-ok ha=${config.version} entry=${entry.state} dashboard=${plan.action} views=${validation.viewCount} cards=${validation.cardCount} entities=${validation.references.length} dashboard_templates=${dashboardTemplates.templateCount} automation_templates=${automationTemplates.templateCount}`);
       return;
     }
 
@@ -185,7 +187,8 @@ async function main() {
     helperResult = await applyHelpers(client, helperSpecifications);
     const refreshed = await getLiveModel(client);
     const validation = validateDashboard(candidate, refreshed.states);
-    const templates = await validateDashboardTemplates(client, candidate);
+    const dashboardTemplates = await validateDashboardTemplates(client, candidate);
+    const automationTemplates = await validateAutomationTemplates(client, automations);
     const services = await client.request("/api/services");
     const scriptServices = services.find((service) => service.domain === "script")?.services ?? {};
     if (!("notify_family" in scriptServices)) throw new Error("Required script.notify_family service is unavailable");
@@ -200,7 +203,7 @@ async function main() {
     await verifyHelpers(client);
     await verifyAutomations(client, automations);
     await verifyDashboard({ ws: client, metadata: dashboardMetadata, candidate });
-    console.log(`deployment-ok ha=${config.version} entry=${entry.state} dashboard=${dashboardResult.action} views=${validation.viewCount} cards=${validation.cardCount} entities=${validation.references.length} templates=${templates.templateCount} helpers=${helperResult.changes.length} automations=${automationResult.changes.length}`);
+    console.log(`deployment-ok ha=${config.version} entry=${entry.state} dashboard=${dashboardResult.action} views=${validation.viewCount} cards=${validation.cardCount} entities=${validation.references.length} dashboard_templates=${dashboardTemplates.templateCount} automation_templates=${automationTemplates.templateCount} helpers=${helperResult.changes.length} automations=${automationResult.changes.length}`);
   } catch (error) {
     const rollbackErrors = [];
     for (const result of [dashboardResult, automationResult, helperResult]) {

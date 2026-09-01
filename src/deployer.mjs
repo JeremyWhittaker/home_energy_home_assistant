@@ -71,6 +71,24 @@ export async function validateDashboardTemplates(client, config) {
   return { templateCount: templates.length };
 }
 
+export async function validateAutomationTemplates(client, automations) {
+  const templates = collectDashboardTemplates(automations);
+  const variables = {
+    alert_key: "home-energy-template-validation",
+    event_key: "home-energy-template-validation",
+    activation_reason: "template validation",
+    this: { entity_id: "automation.home_energy_template_validation" },
+  };
+  for (const template of templates) {
+    await client.request("/api/template", {
+      method: "POST",
+      body: { template, variables },
+      responseType: "text",
+    });
+  }
+  return { templateCount: templates.length };
+}
+
 export function validateDashboard(config, states) {
   if (!config || !Array.isArray(config.views) || config.views.length === 0) {
     throw new Error("Dashboard must contain at least one view");
@@ -203,9 +221,15 @@ function helperConfig(item) {
 }
 
 function comparableHelper(config, domain) {
-  if (domain !== "input_number") return config;
+  if (domain === "input_text") return config;
   const { initial: _initial, ...comparable } = config;
   return comparable;
+}
+
+function helperUpdateConfig(config, domain) {
+  if (domain === "input_text") return config;
+  const { initial: _initial, ...update } = config;
+  return update;
 }
 
 export async function applyHelpers(ws, specifications) {
@@ -228,7 +252,7 @@ export async function applyHelpers(ws, specifications) {
         await ws.call({
           type: `${specification.domain}/update`,
           [`${specification.domain}_id`]: specification.id,
-          ...specification.config,
+          ...helperUpdateConfig(specification.config, specification.domain),
         });
         changes.push({ specification, action: "update", prior: helperConfig(existing) });
       }

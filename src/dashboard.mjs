@@ -124,11 +124,39 @@ function climateRecommendation(e) {
 ## A/C demand strategy
 {% if shortfall and peak %}**Action recommended:** reduce cooling demand now—typically by raising cooling setpoints within your comfort limit—so battery support lasts through the peak window.{% else %}No battery-driven A/C adjustment is currently recommended.{% endif %}
 
-Automatic thermostat changes are intentionally **not armed** until the preferred zones, maximum setpoint, restoration timing, and interaction with existing 5–8 PM automations are commissioned.
+Peak Controls is **{{ 'enabled' if is_state('${e.hvacResponseEnabled}', 'on') else 'disabled · dry run only' }}**. Configure its 6–8 PM window, 25% SOC guardrail, +2°F response, zone caps, and safe restoration on the **Peak Controls** tab.
 
 - **Downstairs:** {{ states('${e.downstairsClimate}') }} · {{ state_attr('${e.downstairsClimate}', 'current_temperature') }}° → {{ state_attr('${e.downstairsClimate}', 'temperature') }}°
 - **Primary bedroom:** {{ states('${e.primaryClimate}') }} · {{ state_attr('${e.primaryClimate}', 'current_temperature') }}° → {{ state_attr('${e.primaryClimate}', 'temperature') }}°
 - **Upstairs:** {{ states('${e.upstairsClimate}') }} · {{ state_attr('${e.upstairsClimate}', 'current_temperature') }}° → {{ state_attr('${e.upstairsClimate}', 'temperature') }}°`;
+}
+
+function peakControlsNarrative(e) {
+  return `## {{ '🟠 Controller active' if is_state('${e.hvacControllerActive}', 'on') else '⚪ Controller standing by' }}
+
+- **Master:** {{ 'enabled' if is_state('${e.hvacResponseEnabled}', 'on') else 'disabled — alerts remain a dry run' }}
+- **Response window:** {{ states('${e.hvacWindowStart}')[0:5] }}–{{ states('${e.hvacWindowEnd}')[0:5] }}
+- **Forecast guardrail:** {{ states('${e.hvacSocGuardrail}') }}% SOC · **setpoint increase:** {{ states('${e.hvacSetpointIncrease}') }}°F
+
+{{ states('${e.hvacControllerStatus}') if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] else 'No controller action has been recorded yet.' }}
+
+The rule activates once per window when **(forecast shortfall AND SOC ≤ guardrail) OR sustained EG4 grid import**. SRP must report a valid active peak window. It only raises selected thermostats already in cooling mode; it never changes mode or turns equipment off.`;
+}
+
+function peakControlsSafety(e) {
+  return `## Ownership and restoration
+
+For each selected zone, Peak Controls snapshots the original target and applies:
+
+**new target = min(original + increase, zone cap, thermostat maximum)**
+
+- A manual or scheduled target change immediately releases that zone.
+- Released zones are never restored or overwritten.
+- At the configured end time, actual peak end, invalid schedule, or master disable, restoration runs only for a still-owned zone whose target exactly matches the value Peak Controls applied.
+- The controller activates at most once per local date/window, including after an automation reload.
+- Existing 6 PM, 8 PM, and 9 PM routines remain authoritative.
+
+The master is deployed **off**. Configure the rules here, review the live values, then enable it when ready.`;
 }
 
 function diagnosticsNarrative(e) {
@@ -434,6 +462,97 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
                 grid_options: { columns: "full", rows: 6 },
               },
               markdown(`Alerts go to the existing **Family notification** script and Home Assistant persistent notifications. They fire when the battery reaches 20%, when the conservative forecast reaches reserve before peak ends, and after material peak import persists for five minutes.`),
+            ],
+          },
+        ],
+      }),
+      sectionsView({
+        title: "Peak Controls",
+        path: "peak-controls",
+        icon: "mdi:thermostat-auto",
+        badges: [
+          badge(e.hvacResponseEnabled, "HVAC master", "mdi:thermostat-auto"),
+          badge(e.hvacControllerActive, "Controller", "mdi:shield-lock-outline"),
+          badge(e.batterySoc, "Battery", "mdi:battery-high"),
+          badge(e.livePeakImportRisk, "Import risk", "mdi:transmission-tower-alert"),
+        ],
+        sections: [
+          {
+            type: "grid",
+            cards: [
+              heading("Peak demand response", "mdi:thermostat-auto"),
+              markdown(peakControlsNarrative(e)),
+              tile(e.hvacControllerActive, "Controller ownership", "mdi:shield-lock-outline"),
+              tile(e.batterySoc, "Battery state of charge", "mdi:battery-high"),
+              tile(e.batteryMinutesToReserve, "Conservative minutes to reserve", "mdi:battery-clock-outline"),
+              tile(e.peakMinutesRemaining, "Actual peak minutes remaining", "mdi:timer-sand"),
+              tile(e.gridImportPower, "Live EG4 grid import", "mdi:transmission-tower-import"),
+              tile(e.peakForecastShortfall, "Forecast shortfall", "mdi:battery-clock-outline"),
+              tile(e.livePeakImportRisk, "Sustained import risk", "mdi:transmission-tower-alert"),
+              {
+                type: "entities",
+                title: "Live thermostat targets",
+                show_header_toggle: false,
+                entities: [
+                  row(e.downstairsClimate, "Downstairs"),
+                  row(e.primaryClimate, "Primary bedroom"),
+                  row(e.upstairsClimate, "Upstairs"),
+                  row(e.hvacEastOwned, "Downstairs owned by Peak Controls"),
+                  row(e.hvacWestOwned, "Primary bedroom owned by Peak Controls"),
+                  row(e.hvacUpstairsOwned, "Upstairs owned by Peak Controls"),
+                ],
+                grid_options: { columns: "full", rows: 6 },
+              },
+            ],
+          },
+          {
+            type: "grid",
+            cards: [
+              heading("Configure the rule", "mdi:tune-vertical"),
+              {
+                type: "entities",
+                title: "Master, timing, and thresholds",
+                show_header_toggle: false,
+                state_color: true,
+                entities: [
+                  row(e.hvacResponseEnabled, "Enable automatic A/C response"),
+                  row(e.hvacWindowStart, "Alert/response start"),
+                  row(e.hvacWindowEnd, "Alert/response end"),
+                  row(e.hvacSocGuardrail, "Forecast SOC guardrail"),
+                  row(e.hvacSetpointIncrease, "Cooling setpoint increase"),
+                  row(e.hvacRestoreEnabled, "Restore still-owned targets"),
+                  row(e.peakImportThreshold, "Sustained import threshold"),
+                ],
+                grid_options: { columns: "full", rows: 7 },
+              },
+              {
+                type: "entities",
+                title: "Zone participation and comfort caps",
+                show_header_toggle: false,
+                state_color: true,
+                entities: [
+                  row(e.hvacEastEnabled, "Downstairs enabled"),
+                  row(e.hvacEastMaximum, "Downstairs maximum"),
+                  row(e.hvacWestEnabled, "Primary bedroom enabled"),
+                  row(e.hvacWestMaximum, "Primary bedroom maximum"),
+                  row(e.hvacUpstairsEnabled, "Upstairs enabled"),
+                  row(e.hvacUpstairsMaximum, "Upstairs maximum"),
+                ],
+                grid_options: { columns: "full", rows: 6 },
+              },
+              markdown(peakControlsSafety(e)),
+              {
+                type: "entities",
+                title: "Controller audit state",
+                show_header_toggle: false,
+                entities: [
+                  row(e.hvacControllerStatus, "Last controller status"),
+                  row(e.hvacControllerEventKey, "Last handled window"),
+                  row(e.peakScheduleValid, "SRP schedule valid"),
+                  row(e.peakWindow, "SRP peak active"),
+                ],
+                grid_options: { columns: "full", rows: 4 },
+              },
             ],
           },
         ],
