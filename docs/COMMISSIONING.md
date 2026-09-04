@@ -130,6 +130,43 @@ Complete desktop/mobile light/dark visual QA before enabling the master. During 
 
 The automatic A/C response master intentionally remains **off**. Alerts and risk calculations continue while automatic thermostat control is disabled.
 
+### September 4, 2026 — automatic A/C response enabled
+
+The master was turned on at 10:00 MST, ahead of that day's 18:00-20:00 control window. This is
+the first time Peak Controls has been permitted to make a thermostat call.
+
+What prompted it: the 2026-09-03 peak was the first live event that exercised the whole rule.
+`Home Energy — battery may not last through peak` fired at 19:02 MST and
+`Home Energy — battery reached reserve` at 20:00 MST. Both ran as designed; no climate service
+call was made, because the master was still off.
+
+State recorded at enablement:
+
+- Master `on`; controller active `off`; all three ownership flags `off`; status `unknown`.
+- Window 18:00-20:00, SOC guardrail 25%, increase +2°F, zone caps 80/80/80°F, all three zones
+  enabled, restoration enabled — all unchanged from the August 31 commissioning.
+- SRP on-peak `off` and outside the control window at the time of the change, so the enable
+  could not activate anything mid-flight. Schedule valid `on`. Battery SOC 100%.
+- All three climates in `cool` with numeric targets: 75°F downstairs, 72°F primary bedroom,
+  74°F upstairs. The 18:00 schedule routine sets its own targets before the window opens, so
+  those are the values the controller will raise from, not these.
+
+Known limitation accepted at enablement: with the guardrail at 25% and the discharge rate
+measured on September 3, the response has roughly seven minutes of usable action on a night
+like that one. The guardrail was deliberately left unchanged; see
+*How the SOC guardrail interacts with discharge rate* in `PEAK_STRATEGY.md` for the measured
+trade-off and what raising it would buy.
+
+What to check after the first event that actually fires:
+
+1. The persistent notification names the activation reason and only the zones it owned.
+2. Each owned zone's applied target equals `min(original + 2, zone cap, thermostat max)`.
+3. Ownership released and the original target restored at 20:00, before the 20:00 routine.
+4. Any zone changed manually mid-window was released and never written back.
+5. `input_text.home_energy_hvac_controller_status` tells a coherent story end to end.
+
+Turn the master off immediately if live behaviour differs from the documented rule.
+
 ## Acceptance criteria
 
 - Model-valid and telemetry-healthy flags are on when sources are fresh.

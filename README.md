@@ -20,7 +20,7 @@ Views:
 
 The existing **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)** page remains a separate equipment page. Enphase and Tigo keep their own detailed pages as well.
 
-Initial commissioning completed on August 30, 2026, and Peak Controls was commissioned on August 31. Home Assistant 2026.8.3 reports the integration loaded and the seven-view dashboard/alert set stable. The optional thermostat controller remains off until it is explicitly enabled on the Peak Controls tab. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
+Initial commissioning completed on August 30, 2026, and Peak Controls was commissioned on August 31. Home Assistant 2026.8.3 reports the integration loaded and the seven-view dashboard/alert set stable. The automatic A/C response master was enabled on September 4, 2026, after the September 3 peak produced a live forecast alert; all three zones participate at the commissioned +2°F and 25% SOC guardrail. See *Peak Controls* below for what the guardrail costs in practice. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
 
 ## The system in one picture
 
@@ -59,10 +59,12 @@ Three alert automations notify the existing `script.notify_family` targets and c
 
 The forecast uses energy above reserve and the greater of recent p80 discharge or the 7 kW planning load. It fails unavailable when telemetry is stale or the sample window is too short.
 
-The **Peak Controls** tab contains the optional A/C demand-response policy. Its defaults are 6:00–8:00 PM, 25% SOC, a +2°F cooling-target increase, all three zones selected, and an 80°F per-zone ceiling. The master switch is deployed **off**. When enabled, it can act once per configured window when either:
+The **Peak Controls** tab contains the optional A/C demand-response policy. Its defaults are 6:00–8:00 PM, 25% SOC, a +2°F cooling-target increase, all three zones selected, and an 80°F per-zone ceiling. The master switch is deployed **off**; it was turned **on** on September 4, 2026. It can act once per configured window when either:
 
 - the battery forecast says the bank will reach reserve before peak ends and SOC is at or below the guardrail; or
 - EG4's whole-property CT remains above the configured import threshold for five minutes.
+
+The guardrail is a brake, not a trigger, and on a fast-discharging night it can become the binding constraint — see *How the SOC guardrail interacts with discharge rate* in `docs/PEAK_STRATEGY.md`.
 
 It never changes HVAC mode or turns equipment off. Each original target is saved before adjustment. A person or another automation changing a target to a different value releases that zone immediately; only a still-owned target that exactly matches the applied value can be restored. The controller releases just before its configured end, then yields to the existing 6 PM, 8 PM, and 9 PM routines.
 

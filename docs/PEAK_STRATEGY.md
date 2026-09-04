@@ -72,6 +72,47 @@ new target = min(original target + increase, zone maximum, thermostat maximum)
 
 Only a climate already in `cool` mode with numeric targets is eligible. Peak Controls never starts or stops equipment, changes HVAC mode, changes a fan, or lowers a cooling target.
 
+### How the SOC guardrail interacts with discharge rate
+
+The forecast branch is `forecast shortfall AND SOC <= guardrail`. The forecast is the
+intelligent half: it predicts reserve before peak ends. The guardrail is only a brake, meant
+to stop the controller acting while the bank is obviously fine. On a night when the bank
+discharges quickly the brake becomes the binding constraint, because SOC crosses a low
+guardrail with very little of the window left.
+
+Measured on 2026-09-03, a weekday summer peak with the control window at 18:00-20:00:
+
+| Time (MST) | SOC | What happened |
+| --- | ---: | --- |
+| 18:00 | ~79% | Control window opens |
+| 19:02 | 60% | Forecast shortfall alert fired |
+| 19:16 | 50% | |
+| 19:30 | 40% | |
+| 19:44 | 30% | |
+| 19:52 | 24% | First minute SOC is at or below the 25% guardrail |
+| 20:00 | 20% | Reserve reached; SRP peak and control window both end |
+
+The bank fell from about 79% to 20% in two hours, roughly 30 points per hour. The forecast
+knew at 19:02. The 25% guardrail withheld permission until 19:52, and the response refuses to
+act inside the final 60 seconds of the window, so the usable action was about seven minutes
+before release and restoration at 20:00.
+
+Read the guardrail as "how much runway do I want the response to have". At the observed
+discharge rate each guardrail point is worth roughly two minutes of action:
+
+| Guardrail | Would have acted | Action before release |
+| ---: | --- | ---: |
+| 60% | 19:02 | ~57 min |
+| 50% | 19:16 | ~44 min |
+| 40% | 19:30 | ~29 min |
+| 25% | 19:52 | ~7 min |
+
+The guardrail remains at the commissioned 25% by explicit choice. Raising it does not make the
+controller more eager on a healthy night, because the forecast must independently be in
+shortfall; it only widens how early the forecast is allowed to act once it is. Revisit this
+after a few live events, comparing the billed demand figure on nights it acted against nights
+it did not.
+
 ### Ownership and restoration
 
 Before each service call, the controller stores the original and intended target and marks only that zone as owned. Thermostats are staggered by two seconds.
