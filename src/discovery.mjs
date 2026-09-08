@@ -53,6 +53,11 @@ const SOURCES = Object.freeze({
 const STATIC = Object.freeze({
   peakWindow: "input_boolean.juicebox_srp_on_peak",
   peakScheduleValid: "input_boolean.juicebox_srp_schedule_valid",
+  // The JuiceBox schedule already decides, and publishes, whether today is an
+  // SRP-observed holiday. Alerts read those two flags so they can say why there
+  // is no peak rather than implying one is merely still ahead.
+  peakHoliday: "input_boolean.juicebox_srp_holiday",
+  peakHolidaysOffPeak: "input_boolean.juicebox_srp_holidays_off_peak",
   peakProfile: "input_text.juicebox_srp_profile_name",
   batteryCapacity: "input_number.home_energy_battery_capacity_kwh",
   batteryReserve: "input_number.home_energy_battery_reserve_percent",

@@ -677,7 +677,7 @@ export function buildAutomations(e) {
         ],
         actions: notifyFamily(
           "Home Energy: battery at reserve",
-          `The EG4 battery bank is at {{ states('${e.batterySoc}') }}% (reserve {{ states('${e.batteryReserve}') }}%). {% if is_state('${e.peakWindow}', 'on') %}SRP peak is active with {{ states('${e.peakMinutesRemaining}') }} minutes remaining; the battery may no longer supplement the home.{% else %}This occurred before the current SRP peak window.{% endif %}`,
+          `The EG4 battery bank is at {{ states('${e.batterySoc}') }}% (reserve {{ states('${e.batteryReserve}') }}%). {% if is_state('${e.peakWindow}', 'on') %}SRP peak is active with {{ states('${e.peakMinutesRemaining}') }} minutes remaining; the battery may no longer supplement the home.{% elif is_state('${e.peakHolidaysOffPeak}', 'on') and is_state('${e.peakHoliday}', 'on') %}Today is an SRP-observed holiday, so there is no on-peak period at all today and no demand charge to protect. This is a note, not a risk.{% else %}SRP peak is not active right now.{% endif %}`,
           e.reserveAlertKey,
         ),
         mode: "single",

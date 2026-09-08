@@ -54,7 +54,9 @@ function fixture() {
 
 test("semantic discovery resolves every calculated, source, and site entity", () => {
   const discovered = discoverHomeEnergy(fixture());
-  assert.equal(Object.keys(discovered.entities).length, 81);
+  assert.equal(Object.keys(discovered.entities).length, 83);
+  assert.equal(discovered.entities.peakHoliday, "input_boolean.juicebox_srp_holiday");
+  assert.equal(discovered.entities.peakHolidaysOffPeak, "input_boolean.juicebox_srp_holidays_off_peak");
   assert.equal(discovered.entities.peakWindow, "input_boolean.juicebox_srp_on_peak");
   assert.match(discovered.entities.combinedSolarPower, /^sensor\./);
 });
@@ -113,6 +115,34 @@ test("dashboard validation rejects missing entities and write actions", () => {
   );
   dashboard.views[0].sections[0].cards.push({ type: "tile", entity: missing, tap_action: { action: "perform-action" } });
   assert.throws(() => validateDashboard(dashboard, data.states), /write\/navigation action/);
+});
+
+test("the reserve alert never implies a peak on a day that has none", () => {
+  // 2026-09-07 was Labor Day. The JuiceBox schedule correctly held on-peak off
+  // all day, but the reserve alert still told the reader the battery had hit its
+  // floor "before the current SRP peak window" -- describing a peak that was
+  // never going to arrive. That sentence is what made a correct schedule look
+  // broken, so it must not come back.
+  const entities = discoverHomeEnergy(fixture()).entities;
+  const reserve = buildAutomations(entities)
+    .find((automation) => automation.id === "home_energy_battery_reserve_alert").config;
+  const message = reserve.actions
+    .find((action) => action.action === "persistent_notification.create").data.message;
+
+  assert.doesNotMatch(message, /before the current SRP peak window/);
+  // Three distinct outcomes: peak running, an observed holiday, or simply not now.
+  assert.match(message, new RegExp(`is_state\\('${entities.peakWindow}', 'on'\\)`));
+  assert.match(message, new RegExp(`is_state\\('${entities.peakHoliday}', 'on'\\)`));
+  assert.match(message, new RegExp(`is_state\\('${entities.peakHolidaysOffPeak}', 'on'\\)`));
+  assert.match(message, /SRP-observed holiday/);
+  assert.match(message, /SRP peak is not active right now/);
+  // The holiday branch is only honoured while holidays are configured exempt.
+  assert.ok(message.indexOf("elif") < message.indexOf("SRP-observed holiday"));
+
+  // Both channels must tell the same story; a divergence here is how the
+  // persistent notification and the phone message drift apart.
+  const family = reserve.actions.find((action) => action.action === "script.notify_family").data.message;
+  assert.equal(family, message);
 });
 
 test("alert and HVAC automations are windowed, one-shot, and mode safe", () => {

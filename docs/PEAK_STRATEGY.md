@@ -19,6 +19,23 @@ The dashboard does not duplicate the calendar in hidden hard-coded templates; it
 
 Trigger when the EG4 bank reaches the editable reserve, default 20%. The test is inclusive (`<= 20.05`) so the inverter's exact 20% floor is caught. If peak begins while already at reserve, the peak-window transition triggers the same alert.
 
+Because this alert deliberately ignores the peak window, its message has to explain the
+context it fired in, and it distinguishes three:
+
+| Situation | What the message says |
+| --- | --- |
+| `juicebox_srp_on_peak` is on | SRP peak is active, with minutes remaining; the battery may no longer supplement the home |
+| Holidays are exempt and today is an SRP-observed holiday | There is no on-peak period at all today and no demand charge to protect — a note, not a risk |
+| Anything else | SRP peak is not active right now |
+
+The middle row exists because of a real false alarm. On Labor Day, 2026-09-07, the JuiceBox
+schedule was entirely correct: the holiday helper turned on at 00:00, `juicebox_srp_on_peak`
+never left `off`, and both peak-gated alerts correctly stayed silent. The battery still
+discharged that evening and hit its 20% floor at 20:01, so this alert fired, as designed --
+but it said the bank had reached reserve *"before the current SRP peak window"*, describing a
+peak that was never going to come. A correct schedule read as a broken one. The wording, not
+the schedule, was the defect.
+
 ### Battery shortfall forecast
 
 Trigger after the conservative forecast remains in shortfall for two minutes during both an active, valid SRP peak window and the editable Peak Controls window. The message includes minutes to reserve and peak minutes remaining, then states whether automatic response is enabled or still in dry-run mode.
@@ -29,7 +46,16 @@ Trigger after the whole-property EG4 CT reports import at or above the editable 
 
 Each alert writes a peak-window event key to a restored `input_text` helper. State transitions provide prompt delivery, while five-minute reconciliation triggers recover safely after Home Assistant or automation restarts. The persisted key prevents minute-by-minute repeats within the same AM/PM peak window. Alerts use both a persistent notification and the existing family notification script.
 
-The exact reserve-floor alert remains independent of the narrower Peak Controls window because reaching the inverter's 20% floor before peak is still useful warning information.
+The exact reserve-floor alert remains independent of the narrower Peak Controls window because reaching the inverter's 20% floor before peak is still useful warning information. On a day with no peak at all it is still worth sending -- an empty bank is worth knowing about for backup reasons alone -- but it must say so plainly rather than implying a demand risk that cannot exist.
+
+### Nothing here schedules the battery
+
+Worth stating because it is easy to assume otherwise: this project reads the EG4 and never
+commands it. No automation writes to any `18kpv` entity. The inverter self-consumes on its own
+logic, so the bank discharges any evening that load exceeds solar -- weekday, weekend or
+observed holiday alike. The SRP schedule decides when *alerts and the A/C response* may act; it
+does not, and cannot, decide when the battery discharges. Holding charge on off-peak days would
+be a new capability against the inverter's own controls, not a schedule fix.
 
 ## Peak Controls
 
