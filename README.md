@@ -20,6 +20,8 @@ Views:
 
 The existing **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)** page remains a separate equipment page. Enphase and Tigo keep their own detailed pages as well.
 
+All EG4 equipment detail — the inverter dashboard and, now, per-cell battery data read straight from the EG4 WiFi dongle on the LAN (max/min cell voltage, cell delta, pack capacity, module count) via its own local Home Assistant integration — lives in the dedicated **[eg4_home_assistant](https://github.com/JeremyWhittaker/eg4_home_assistant)** project. This whole-property project treats EG4 as one source among several and does not duplicate that equipment view; for anything about the EG4 inverter or batteries themselves, go there.
+
 Initial commissioning completed on August 30, 2026, and Peak Controls was commissioned on August 31. Home Assistant 2026.8.3 reports the integration loaded and the seven-view dashboard/alert set stable. The automatic A/C response master was enabled on September 4, 2026, after the September 3 peak produced a live forecast alert; all three zones participate at the commissioned +2°F and 25% SOC guardrail. See *Peak Controls* below for what the guardrail costs in practice. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
 
 ## The system in one picture
