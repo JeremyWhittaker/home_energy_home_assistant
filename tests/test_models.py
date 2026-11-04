@@ -244,12 +244,8 @@ def test_reconciliation_defensively_accepts_websocket_milliseconds() -> None:
             }
             for hour in range(24)
         ],
-        eg4_import_daily=[
-            {"start": midnight.timestamp() * 1000, "change": 30.0}
-        ],
-        eg4_export_daily=[
-            {"start": midnight.timestamp() * 1000, "change": 6.0}
-        ],
+        eg4_import_daily=[{"start": midnight.timestamp() * 1000, "change": 30.0}],
+        eg4_export_daily=[{"start": midnight.timestamp() * 1000, "change": 6.0}],
         today=date(2026, 8, 30),
     )
 
@@ -268,3 +264,139 @@ def test_reconciliation_rejects_partial_srp_day() -> None:
     )
 
     assert result is None
+
+
+def _hours(day: int, *, state: float = 1.0):
+    midnight = datetime(2026, 8, day, 7, tzinfo=UTC)
+    return [
+        {"start": (midnight + timedelta(hours=hour)).timestamp(), "state": state}
+        for hour in range(24)
+    ]
+
+
+def test_duplicate_rows_cannot_turn_twenty_three_hours_into_a_complete_day() -> None:
+    hours = _hours(27)
+    result = calculate_reconciliation(
+        srp_hourly=[*hours[:23], hours[0]],
+        eg4_import_daily=[_row(27, change=30.0)],
+        eg4_export_daily=[_row(27, change=6.0)],
+        today=date(2026, 8, 30),
+    )
+    assert result is None
+
+
+def test_identical_duplicates_are_counted_once_and_conflicts_reject_the_day() -> None:
+    hours = _hours(27)
+    kwargs = {
+        "eg4_import_daily": [_row(27, change=30.0)],
+        "eg4_export_daily": [_row(27, change=6.0)],
+        "today": date(2026, 8, 30),
+    }
+    duplicate = calculate_reconciliation(srp_hourly=[*hours, hours[0]], **kwargs)
+    assert duplicate is not None
+    assert duplicate.srp_net_kwh == 24
+    assert duplicate.srp_hour_count == 24
+    assert duplicate.srp_duplicate_count == 1
+
+    conflicting = calculate_reconciliation(
+        srp_hourly=[*hours, {**hours[0], "state": 2}], **kwargs
+    )
+    assert conflicting is None
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), None])
+def test_invalid_meter_interval_cannot_be_hidden_in_a_daily_total(bad_value) -> None:
+    hours = _hours(27)
+    hours[5] = {**hours[5], "state": bad_value}
+    result = calculate_reconciliation(
+        srp_hourly=hours,
+        eg4_import_daily=[_row(27, change=30.0)],
+        eg4_export_daily=[_row(27, change=6.0)],
+        today=date(2026, 8, 30),
+    )
+    assert result is None
+
+
+def test_live_reconciliation_requires_twenty_four_eg4_hours_too() -> None:
+    hours = _hours(27)
+    eg4_import = [{"start": row["start"], "change": 2} for row in hours]
+    eg4_export = [{"start": row["start"], "change": 1} for row in hours]
+    assert (
+        calculate_reconciliation(
+            srp_hourly=hours,
+            eg4_import_hourly=eg4_import[:-1],
+            eg4_export_hourly=eg4_export,
+            today=date(2026, 8, 30),
+        )
+        is None
+    )
+
+    complete = calculate_reconciliation(
+        srp_hourly=hours,
+        eg4_import_hourly=eg4_import,
+        eg4_export_hourly=eg4_export,
+        today=date(2026, 8, 30),
+    )
+    assert complete is not None
+    assert complete.eg4_hour_count == 24
+    assert complete.matches is True
+
+
+def test_large_daily_disagreement_is_not_hidden_by_high_gross_energy() -> None:
+    # Actual November 3 comparison values: +8.5 kWh passed the old 5%-gross gate.
+    result = calculate_reconciliation(
+        srp_hourly=_hours(27, state=81.6 / 24),
+        eg4_import_daily=[_row(27, change=130.7)],
+        eg4_export_daily=[_row(27, change=40.6)],
+        today=date(2026, 8, 30),
+    )
+    assert result is not None
+    assert result.eg4_net_kwh == pytest.approx(90.1)
+    assert result.residual_kwh == pytest.approx(8.5)
+    assert result.gross_throughput_kwh == pytest.approx(171.3)
+    assert result.tolerance_kwh == pytest.approx(1.802)
+    assert result.gross_residual_percent == pytest.approx(4.9621, rel=0.001)
+    assert result.net_residual_percent == pytest.approx(9.434, rel=0.001)
+    assert result.matches is False
+
+
+def test_net_export_and_zero_net_are_valid_without_infinite_percentages() -> None:
+    exported = calculate_reconciliation(
+        srp_hourly=_hours(27, state=-1),
+        eg4_import_daily=[_row(27, change=6)],
+        eg4_export_daily=[_row(27, change=30)],
+        today=date(2026, 8, 30),
+    )
+    assert exported is not None
+    assert exported.eg4_net_kwh == -24
+    assert exported.matches is True
+
+    neutral = calculate_reconciliation(
+        srp_hourly=_hours(27, state=0),
+        eg4_import_daily=[_row(27, change=100)],
+        eg4_export_daily=[_row(27, change=100)],
+        today=date(2026, 8, 30),
+    )
+    assert neutral is not None
+    assert neutral.net_residual_percent is None
+    assert neutral.tolerance_kwh == 1
+
+
+def test_incomplete_latest_day_does_not_replace_a_complete_older_comparison() -> None:
+    result = calculate_reconciliation(
+        srp_hourly=[*_hours(27), *_hours(28)[:20]],
+        eg4_import_daily=[_row(27, change=30), _row(28, change=50)],
+        eg4_export_daily=[_row(27, change=6), _row(28, change=2)],
+        today=date(2026, 8, 30),
+    )
+    assert result is not None
+    assert result.day == date(2026, 8, 27)
+
+
+def test_an_independent_eg4_load_reading_survives_enphase_loss() -> None:
+    result = calculate_live(
+        inputs(model_sources_fresh=False, enphase_power_w=None, eg4_load_source_fresh=True),
+        options(),
+    )
+    assert result.eg4_metered_load_w == 3913
+    assert result.whole_home_load_w is None

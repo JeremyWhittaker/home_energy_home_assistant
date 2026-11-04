@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from math import isfinite
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,7 @@ class LiveInputs:
     on_peak: bool | None
     peak_schedule_valid: bool | None
     peak_minutes_remaining: float | None
+    eg4_load_source_fresh: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +95,13 @@ class Reconciliation:
     tolerance_kwh: float
     matches: bool
     srp_hour_count: int
+    eg4_hour_count: int | None
+    srp_duplicate_count: int
+    gross_throughput_kwh: float
+    net_residual_percent: float | None
+    gross_residual_percent: float | None
+    absolute_tolerance_kwh: float
+    relative_tolerance_percent: float
 
 
 def calculate_live(
@@ -255,7 +264,15 @@ def calculate_live(
         combined_solar_power_w=combined_solar,
         combined_ac_supply_power_w=combined_ac,
         whole_home_load_w=whole_home,
-        eg4_metered_load_w=(inputs.eg4_metered_load_w if inputs.model_sources_fresh else None),
+        eg4_metered_load_w=(
+            inputs.eg4_metered_load_w
+            if (
+                inputs.eg4_load_source_fresh
+                if inputs.eg4_load_source_fresh is not None
+                else inputs.model_sources_fresh
+            )
+            else None
+        ),
         grid_net_w=inputs.grid_net_w if inputs.grid_source_fresh else None,
         grid_import_w=grid_import,
         grid_export_w=grid_export,
@@ -296,9 +313,13 @@ def _local_date(timestamp: int | float) -> date:
 def calculate_reconciliation(
     *,
     srp_hourly: list[dict[str, Any]],
-    eg4_import_daily: list[dict[str, Any]],
-    eg4_export_daily: list[dict[str, Any]],
+    eg4_import_daily: list[dict[str, Any]] | None = None,
+    eg4_export_daily: list[dict[str, Any]] | None = None,
+    eg4_import_hourly: list[dict[str, Any]] | None = None,
+    eg4_export_hourly: list[dict[str, Any]] | None = None,
     today: date | None = None,
+    absolute_tolerance_kwh: float = 1.0,
+    relative_tolerance_percent: float = 2.0,
 ) -> Reconciliation | None:
     """Compare raw SRP hourly net states with same-day EG4 CT counter changes.
 
@@ -306,40 +327,106 @@ def calculate_reconciliation(
     raw hourly ``state`` is the billing-ledger interval value and can be grouped
     safely by the Arizona calendar day.
     """
+    if (
+        not isfinite(absolute_tolerance_kwh)
+        or absolute_tolerance_kwh < 0
+        or not isfinite(relative_tolerance_percent)
+        or not 0 <= relative_tolerance_percent <= 100
+    ):
+        raise ValueError("Reconciliation tolerances must be finite and non-negative")
     today = today or datetime.now(PHOENIX).date()
-    srp_by_day: dict[date, list[float]] = {}
-    for row in srp_hourly:
-        try:
-            day = _local_date(row["start"])
-            value = float(row["state"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if day < today:
-            srp_by_day.setdefault(day, []).append(value)
+
+    def hourly_values(
+        rows: list[dict[str, Any]], key: str, *, non_negative: bool = False
+    ) -> tuple[dict[date, dict[int, float]], dict[date, int]]:
+        values: dict[date, dict[int, float]] = {}
+        duplicates: dict[date, int] = {}
+        invalid: set[date] = set()
+        for row in rows:
+            try:
+                timestamp = float(row["start"])
+                if abs(timestamp) >= 100_000_000_000:
+                    timestamp /= 1000.0
+                local = datetime.fromtimestamp(timestamp, UTC).astimezone(PHOENIX)
+            except (KeyError, TypeError, ValueError, OverflowError, OSError):
+                continue
+            day = local.date()
+            if day >= today:
+                continue
+            try:
+                value = float(row[key])
+            except (KeyError, TypeError, ValueError):
+                invalid.add(day)
+                continue
+            if (
+                not isfinite(value)
+                or (non_negative and value < 0)
+                or local.minute != 0
+                or local.second != 0
+                or local.microsecond != 0
+            ):
+                invalid.add(day)
+                continue
+            hours = values.setdefault(day, {})
+            if local.hour in hours:
+                duplicates[day] = duplicates.get(day, 0) + 1
+                # Exact duplicate records are harmless; conflicting revisions
+                # need a fresh settled read instead of an arbitrary winner.
+                if hours[local.hour] != value:
+                    invalid.add(day)
+            else:
+                hours[local.hour] = value
+        return (
+            {day: hours for day, hours in values.items() if day not in invalid},
+            duplicates,
+        )
+
+    srp_by_day, srp_duplicates = hourly_values(srp_hourly, "state")
 
     def daily_changes(rows: list[dict[str, Any]]) -> dict[date, float]:
         values: dict[date, float] = {}
+        invalid: set[date] = set()
         for row in rows:
             try:
                 day = _local_date(row["start"])
                 value = float(row["change"])
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError, OverflowError, OSError):
+                continue
+            if not isfinite(value) or value < 0:
+                invalid.add(day)
                 continue
             if day < today:
+                if day in values and values[day] != value:
+                    invalid.add(day)
                 values[day] = value
-        return values
+        return {day: value for day, value in values.items() if day not in invalid}
 
-    imports = daily_changes(eg4_import_daily)
-    exports = daily_changes(eg4_export_daily)
+    hourly_eg4 = eg4_import_hourly is not None or eg4_export_hourly is not None
+    if hourly_eg4:
+        import_hours, _ = hourly_values(eg4_import_hourly or [], "change", non_negative=True)
+        export_hours, _ = hourly_values(eg4_export_hourly or [], "change", non_negative=True)
+        imports = {
+            day: sum(hours.values()) for day, hours in import_hours.items() if len(hours) == 24
+        }
+        exports = {
+            day: sum(hours.values()) for day, hours in export_hours.items() if len(hours) == 24
+        }
+    else:
+        # Retain support for callers already holding day aggregates. The live
+        # coordinator supplies hourly rows so both meters' coverage is checked.
+        imports = daily_changes(eg4_import_daily or [])
+        exports = daily_changes(eg4_export_daily or [])
     candidates = sorted(set(srp_by_day) & set(imports) & set(exports), reverse=True)
     for day in candidates:
         hourly = srp_by_day[day]
-        if len(hourly) < 20:
+        if len(hourly) != 24:
             continue
-        srp_net = sum(hourly)
+        srp_net = sum(hourly.values())
         eg4_net = imports[day] - exports[day]
         residual = eg4_net - srp_net
-        tolerance = max(1.0, 0.05 * (abs(imports[day]) + abs(exports[day])))
+        net_scale = max(abs(srp_net), abs(eg4_net))
+        gross = imports[day] + exports[day]
+        tolerance = max(absolute_tolerance_kwh, relative_tolerance_percent / 100.0 * net_scale)
         return Reconciliation(
             day=day,
             srp_net_kwh=srp_net,
@@ -350,5 +437,12 @@ def calculate_reconciliation(
             tolerance_kwh=tolerance,
             matches=abs(residual) <= tolerance,
             srp_hour_count=len(hourly),
+            eg4_hour_count=24 if hourly_eg4 else None,
+            srp_duplicate_count=srp_duplicates.get(day, 0),
+            gross_throughput_kwh=gross,
+            net_residual_percent=100.0 * residual / net_scale if net_scale else None,
+            gross_residual_percent=100.0 * residual / gross if gross else None,
+            absolute_tolerance_kwh=absolute_tolerance_kwh,
+            relative_tolerance_percent=relative_tolerance_percent,
         )
     return None

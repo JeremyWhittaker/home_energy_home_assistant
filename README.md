@@ -1,8 +1,8 @@
 # Home Energy for Home Assistant
 
-This project turns Jeremy's EG4, Enphase, Tigo, battery, and SRP data into one honest whole-property energy view.
+This project turns Jeremy's EG4, Enphase, Tigo, battery, and SRP data into one combined whole-property energy view.
 
-The central rule is simple: **EG4's grid CT is the live net truth at the utility boundary.** EG4 and Enphase are separate solar arrays. Tigo watches the EG4 panels only, so Tigo must never be added as a third source of solar production. SRP's separate “usage” and “production” totals do not match this behind-the-meter wiring; only SRP net energy is used to check the EG4 grid CT.
+The central rule is simple: **EG4's grid CT is the selected live net reading at the utility boundary.** EG4 and Enphase are separate solar arrays. Tigo watches the EG4 panels only, so Tigo must never be added as a third source of solar production. SRP's separate “usage” and “production” totals do not match this behind-the-meter wiring; only SRP net energy is used to check the EG4 grid CT.
 
 ## Dashboard
 
@@ -98,3 +98,9 @@ uv run --python 3.12 --extra test pytest -q
 ```
 
 See [Topology](docs/TOPOLOGY.md), [Measurement model](docs/MEASUREMENT_MODEL.md), [Peak strategy](docs/PEAK_STRATEGY.md), [Commissioning](docs/COMMISSIONING.md), and [Operations](docs/OPERATIONS.md).
+
+## November 4 measurement corrections
+
+The utility comparison now requires 24 distinct valid hourly intervals and reports separate net-energy and gross-flow tolerances. The net comparison uses the larger of 1 kWh or 2% of the larger absolute net reading; a broad gross-flow tolerance no longer hides a material net discrepancy. Missing or failed comparison data clears the cached result.
+
+Tigo-to-EG4 comparisons now expire with their source samples and expose alignment/freshness details. Local Enphase remains preferred; a separately identified cloud power fallback is disabled by default until its whole-array scope is verified, and cumulative energy sources are never spliced. The seasonal calendar model validates the existing shared SRP helpers and proposes the uploaded winter profile; this checkpoint alone does not enable inverter control.

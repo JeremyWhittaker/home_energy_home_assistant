@@ -29,6 +29,7 @@ class SourceEntities:
     eg4_grid_export_lifetime: str
     enphase_power: str
     enphase_lifetime: str
+    enphase_cloud_power: str | None = None
     enphase_service_status: str | None = None
     enphase_gateway_status: str | None = None
     enphase_active_microinverters: str | None = None
@@ -181,6 +182,7 @@ def discover_sources(
     )
 
     optional = {
+        "enphase_cloud_power": ("enphase_ev", "Production Power"),
         "enphase_service_status": ("enphase_ev", "Service Status"),
         "enphase_gateway_status": ("enphase_ev", "Gateway Status"),
         "enphase_active_microinverters": ("enphase_ev", "Active Microinverters"),

@@ -62,9 +62,18 @@ def _forecast_attrs(snapshot: HomeEnergySnapshot) -> dict[str, Any]:
 
 def _reconciliation_attrs(snapshot: HomeEnergySnapshot) -> dict[str, Any]:
     reconciliation = snapshot.reconciliation
+    freshness = {
+        "refreshed_at": (
+            snapshot.reconciliation_refreshed_at.isoformat()
+            if snapshot.reconciliation_refreshed_at
+            else None
+        ),
+        "refresh_error": snapshot.reconciliation_error,
+    }
     if reconciliation is None:
-        return {}
+        return freshness
     return {
+        **freshness,
         "date": reconciliation.day.isoformat(),
         "srp_net_kwh": round(reconciliation.srp_net_kwh, 3),
         "eg4_import_kwh": round(reconciliation.eg4_import_kwh, 3),
@@ -73,7 +82,53 @@ def _reconciliation_attrs(snapshot: HomeEnergySnapshot) -> dict[str, Any]:
         "tolerance_kwh": round(reconciliation.tolerance_kwh, 3),
         "matches": reconciliation.matches,
         "srp_hour_count": reconciliation.srp_hour_count,
-        "method": "sum raw SRP hourly net states; compare with EG4 daily import minus export",
+        "eg4_hour_count": reconciliation.eg4_hour_count,
+        "expected_hour_count": 24,
+        "srp_duplicate_count": reconciliation.srp_duplicate_count,
+        "gross_throughput_kwh": round(reconciliation.gross_throughput_kwh, 3),
+        "net_residual_percent": reconciliation.net_residual_percent,
+        "gross_residual_percent": reconciliation.gross_residual_percent,
+        "absolute_tolerance_kwh": reconciliation.absolute_tolerance_kwh,
+        "relative_tolerance_percent": reconciliation.relative_tolerance_percent,
+        "tolerance_basis": "larger absolute net energy; absolute kWh floor",
+        "method": "24 unique Phoenix hourly SRP net states versus EG4 hourly counter changes",
+    }
+
+
+def _enphase_attrs(snapshot: HomeEnergySnapshot) -> dict[str, Any]:
+    return {
+        "enphase_power_source": snapshot.enphase_power_source,
+        "enphase_power_entity": snapshot.enphase_power_entity,
+        "enphase_power_w": snapshot.enphase_power_w,
+        "enphase_sample_at": (
+            snapshot.enphase_sample_at.isoformat() if snapshot.enphase_sample_at else None
+        ),
+        "enphase_cloud_fallback": snapshot.enphase_cloud_fallback,
+        "power_quality": (
+            "Estimate using delayed Enphase cloud sample"
+            if snapshot.enphase_cloud_fallback
+            else "Derived from local production telemetry"
+            if snapshot.enphase_power_w is not None
+            else "Unavailable"
+        ),
+    }
+
+
+def _tigo_comparison_attrs(snapshot: HomeEnergySnapshot) -> dict[str, Any]:
+    return {
+        "tigo_sample_at": (
+            snapshot.tigo_sample_at.isoformat() if snapshot.tigo_sample_at else None
+        ),
+        "eg4_sample_at": (
+            snapshot.tigo_aligned_sample_at.isoformat()
+            if snapshot.tigo_aligned_sample_at
+            else None
+        ),
+        "sample_age_minutes": snapshot.tigo_cloud_age_minutes,
+        "alignment_skew_seconds": snapshot.tigo_alignment_skew_seconds,
+        "maximum_alignment_skew_seconds": 180,
+        "comparison_reason": snapshot.tigo_alignment_reason,
+        "ratio_available": snapshot.tigo_to_eg4_percent is not None,
     }
 
 
@@ -87,8 +142,9 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=0,
         classification="Estimated",
-        formula="EG4 PV DC power + local Enphase AC production; Tigo is excluded",
+        formula="EG4 PV DC + selected Enphase AC power; mixed basis; Tigo excluded",
         value_fn=lambda s: s.calculation.combined_solar_power_w,
+        attrs_fn=_enphase_attrs,
     ),
     HomeEnergySensorDescription(
         key="combined_ac_supply_power",
@@ -99,8 +155,9 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=0,
         classification="Derived",
-        formula="EG4 AC power + local Enphase AC production",
+        formula="EG4 AC power + selected Enphase AC power; can include battery energy",
         value_fn=lambda s: s.calculation.combined_ac_supply_power_w,
+        attrs_fn=_enphase_attrs,
     ),
     HomeEnergySensorDescription(
         key="whole_home_load_estimate",
@@ -111,12 +168,15 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=0,
         classification="Derived",
-        formula="EG4 Consumption Power + local Enphase production",
+        formula="EG4 vendor-calculated load + selected Enphase production",
         value_fn=lambda s: s.calculation.whole_home_load_w,
         attrs_fn=lambda s: {
-            "equivalent_formula": "EG4 AC + Enphase + signed grid - rectifier",
+            **_enphase_attrs(s),
+            "classification": "Estimated" if s.enphase_cloud_fallback else "Derived",
+            "equivalent_formula": "EG4 AC + selected Enphase + signed grid - rectifier",
             "balance_residual_w": s.calculation.model_balance_residual_w,
             "balance_tolerance_w": s.calculation.model_tolerance_w,
+            "balance_meaning": "internal consistency, not independent meter calibration",
             "backup_regular_split": "unavailable without an independent panel submeter",
         },
     ),
@@ -296,7 +356,15 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
         classification="Derived",
         value_fn=lambda s: s.source_health,
         attrs_fn=lambda s: {
+            **_enphase_attrs(s),
             "issues": list(s.issues),
+            "reconciliation_refreshed_at": (
+                s.reconciliation_refreshed_at.isoformat()
+                if s.reconciliation_refreshed_at
+                else None
+            ),
+            "reconciliation_error": s.reconciliation_error,
+            "tigo_comparison_reason": s.tigo_alignment_reason,
             "source_ages_minutes": {
                 key: round(value, 1) if value is not None else None
                 for key, value in s.source_ages_minutes.items()
@@ -315,6 +383,7 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
         formula="Tigo view of the EG4 array; diagnostic only and never added to solar",
         value_fn=lambda s: s.tigo_power_w,
         attrs_fn=lambda s: {
+            **_tigo_comparison_attrs(s),
             "reporting_modules": s.tigo_reporting_modules,
             "configured_modules": s.tigo_configured_modules,
             "cloud_age_minutes": s.tigo_cloud_age_minutes,
@@ -331,6 +400,7 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
         classification="Measured",
         formula="EG4 Recorder value nearest the Tigo cloud sample timestamp",
         value_fn=lambda s: s.tigo_aligned_eg4_power_w,
+        attrs_fn=_tigo_comparison_attrs,
     ),
     HomeEnergySensorDescription(
         key="tigo_to_eg4_ratio",
@@ -342,6 +412,7 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
         classification="Derived",
         formula="timestamp-aligned Tigo power / EG4 PV power; diagnostic only",
         value_fn=lambda s: s.tigo_to_eg4_percent,
+        attrs_fn=_tigo_comparison_attrs,
     ),
     HomeEnergySensorDescription(
         key="enphase_active_microinverters",

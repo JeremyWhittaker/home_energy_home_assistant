@@ -7,6 +7,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from functools import partial
+from math import isfinite
 from statistics import mean
 
 from homeassistant.components.recorder import get_instance
@@ -67,6 +68,12 @@ from .models import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Cloud production is a timestamped estimate, never a replacement for the
+# Envoy's cumulative energy series. Its normal publication cadence is slower.
+ENPHASE_CLOUD_STALE_AFTER = timedelta(minutes=10)
+TIGO_MAXIMUM_ALIGNMENT_SKEW = timedelta(minutes=3)
+MAXIMUM_FUTURE_SKEW = timedelta(minutes=1)
+
 
 @dataclass(frozen=True, slots=True)
 class HomeEnergySnapshot:
@@ -94,6 +101,17 @@ class HomeEnergySnapshot:
     srp_bill_projection_usd: float | None
     peak_minutes_remaining: float | None
     options: LiveOptions
+    enphase_power_source: str = "unavailable"
+    enphase_power_entity: str | None = None
+    enphase_power_w: float | None = None
+    enphase_sample_at: datetime | None = None
+    enphase_cloud_fallback: bool = False
+    tigo_sample_at: datetime | None = None
+    tigo_aligned_sample_at: datetime | None = None
+    tigo_alignment_skew_seconds: float | None = None
+    tigo_alignment_reason: str = "Not sampled"
+    reconciliation_refreshed_at: datetime | None = None
+    reconciliation_error: str | None = None
 
 
 def _percentile_80(values: list[float]) -> float | None:
@@ -115,7 +133,8 @@ def _to_number(state: State | None) -> float | None:
     if not _is_valid_state(state):
         return None
     try:
-        return float(state.state)
+        value = float(state.state)
+        return value if isfinite(value) else None
     except (TypeError, ValueError):
         return None
 
@@ -124,18 +143,41 @@ def _power_w(state: State | None) -> float | None:
     value = _to_number(state)
     if value is None:
         return None
-    unit = str(state.attributes.get("unit_of_measurement", "W")).casefold()
-    factors = {"w": 1.0, "kw": 1000.0, "mw": 1_000_000.0}
-    return value * factors.get(unit, 1.0)
+    unit = str(state.attributes.get("unit_of_measurement", "")).strip()
+    factors = {"W": 1.0, "kW": 1000.0, "MW": 1_000_000.0, "mW": 0.001}
+    factor = factors.get(unit)
+    return value * factor if factor is not None else None
 
 
 def _energy_kwh(state: State | None) -> float | None:
     value = _to_number(state)
     if value is None:
         return None
-    unit = str(state.attributes.get("unit_of_measurement", "kWh")).casefold()
-    factors = {"wh": 0.001, "kwh": 1.0, "mwh": 1000.0}
-    return value * factors.get(unit, 1.0)
+    unit = str(state.attributes.get("unit_of_measurement", "")).strip()
+    factors = {"Wh": 0.001, "kWh": 1.0, "MWh": 1000.0, "mWh": 0.000001}
+    factor = factors.get(unit)
+    return value * factor if factor is not None else None
+
+
+def _timestamp(value: object) -> datetime | None:
+    """Accept explicit timezone-bearing source timestamps only."""
+    if not isinstance(value, str):
+        return None
+    parsed = dt_util.parse_datetime(value)
+    if parsed is None or parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class EnphasePowerSelection:
+    """Exactly one selected power source, with its actual sample time."""
+
+    power_w: float | None
+    entity_id: str | None
+    sampled_at: datetime | None
+    source: str
+    cloud_fallback: bool = False
 
 
 def _bool_state(state: State | None) -> bool | None:
@@ -186,9 +228,15 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
         self._last_battery_report: datetime | None = None
         self._last_reconciliation_update: datetime | None = None
         self._reconciliation: Reconciliation | None = None
+        self._reconciliation_refreshed_at: datetime | None = None
+        self._reconciliation_error: str | None = None
         self._last_tigo_sample: str | None = None
         self._tigo_aligned_eg4_w: float | None = None
         self._tigo_ratio_percent: float | None = None
+        self._tigo_sample_at: datetime | None = None
+        self._tigo_aligned_sample_at: datetime | None = None
+        self._tigo_alignment_skew_seconds: float | None = None
+        self._tigo_alignment_reason = "Not sampled"
 
     def _state(self, entity_id: str | None) -> State | None:
         return self.hass.states.get(entity_id) if entity_id else None
@@ -242,8 +290,58 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
     def _fresh(self, entity_id: str | None, now: datetime, maximum: timedelta) -> bool:
         state = self._state(entity_id)
         return bool(
-            _is_valid_state(state) and state is not None and now - _state_time(state) <= maximum
+            _is_valid_state(state)
+            and state is not None
+            and -MAXIMUM_FUTURE_SKEW <= now - _state_time(state) <= maximum
         )
+
+    def _enphase_power(self, now: datetime) -> EnphasePowerSelection:
+        """Prefer local production; use one explicitly fresh cloud sample if needed."""
+        local = self._state(self.sources.enphase_power)
+        local_w = _power_w(local)
+        if (
+            local_w is not None
+            and local_w >= 0
+            and local is not None
+            and self._fresh(self.sources.enphase_power, now, ENPHASE_STALE_AFTER)
+        ):
+            return EnphasePowerSelection(
+                local_w, local.entity_id, _state_time(local), "Local Envoy"
+            )
+
+        # Cloud API semantics must first be checked against this installation's
+        # whole-array Envoy reading. A well-formed timestamp alone does not
+        # establish that the cloud endpoint represents the same equipment.
+        allow_cloud = self.entry.options.get(
+            "allow_enphase_cloud_power_fallback",
+            self.entry.data.get("allow_enphase_cloud_power_fallback", False),
+        )
+        if allow_cloud is not True:
+            return EnphasePowerSelection(None, None, None, "unavailable")
+
+        cloud = self._state(self.sources.enphase_cloud_power)
+        cloud_w = _power_w(cloud)
+        if cloud is not None and cloud_w is not None and cloud_w >= 0:
+            attrs = cloud.attributes
+            sampled_at = _timestamp(attrs.get("sampled_at_utc"))
+            freshness_at = _timestamp(attrs.get("freshness_reference_utc"))
+            if (
+                attrs.get("source") == "app-api:get_latest_power"
+                and attrs.get("using_stale") is False
+                and attrs.get("using_cached") is False
+                and sampled_at is not None
+                and freshness_at is not None
+                and -MAXIMUM_FUTURE_SKEW <= now - sampled_at <= ENPHASE_CLOUD_STALE_AFTER
+                and -MAXIMUM_FUTURE_SKEW <= now - freshness_at <= ENPHASE_CLOUD_STALE_AFTER
+                and abs(sampled_at - freshness_at) <= ENPHASE_CLOUD_STALE_AFTER
+                and self._fresh(
+                    self.sources.enphase_cloud_power, now, ENPHASE_CLOUD_STALE_AFTER
+                )
+            ):
+                return EnphasePowerSelection(
+                    cloud_w, cloud.entity_id, sampled_at, "Enphase cloud estimate", True
+                )
+        return EnphasePowerSelection(None, None, None, "unavailable")
 
     def _peak_minutes_remaining(self, now: datetime) -> float | None:
         if _bool_state(self._state(PEAK_ON)) is not True:
@@ -309,9 +407,12 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
         return mean(values), _percentile_80(values), len(values), span
 
     async def _async_refresh_reconciliation(self, now: datetime) -> None:
+        retry_interval = (
+            timedelta(minutes=5) if self._reconciliation_error else RECONCILIATION_INTERVAL
+        )
         if (
             self._last_reconciliation_update is not None
-            and now - self._last_reconciliation_update < RECONCILIATION_INTERVAL
+            and now - self._last_reconciliation_update < retry_interval
         ):
             return
         self._last_reconciliation_update = now
@@ -326,6 +427,8 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 if statistic_id.endswith("_energy_net")
             ]
             if len(srp_ids) != 1:
+                self._reconciliation = None
+                self._reconciliation_error = "SRP net statistic is missing or ambiguous"
                 _LOGGER.warning(
                     "Expected one SRP net statistic for reconciliation; found %s",
                     len(srp_ids),
@@ -354,35 +457,70 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                         self.sources.eg4_grid_import_lifetime,
                         self.sources.eg4_grid_export_lifetime,
                     },
-                    "day",
+                    "hour",
                     None,
                     {"change"},
                 )
             )
             self._reconciliation = calculate_reconciliation(
                 srp_hourly=list(srp.get(srp_ids[0], [])),
-                eg4_import_daily=list(eg4.get(self.sources.eg4_grid_import_lifetime, [])),
-                eg4_export_daily=list(eg4.get(self.sources.eg4_grid_export_lifetime, [])),
+                eg4_import_hourly=list(eg4.get(self.sources.eg4_grid_import_lifetime, [])),
+                eg4_export_hourly=list(eg4.get(self.sources.eg4_grid_export_lifetime, [])),
                 today=dt_util.as_local(now).date(),
+                absolute_tolerance_kwh=float(
+                    self.entry.options.get(
+                        "reconciliation_absolute_tolerance_kwh",
+                        self.entry.data.get("reconciliation_absolute_tolerance_kwh", 1.0),
+                    )
+                ),
+                relative_tolerance_percent=float(
+                    self.entry.options.get(
+                        "reconciliation_relative_tolerance_percent",
+                        self.entry.data.get("reconciliation_relative_tolerance_percent", 2.0),
+                    )
+                ),
             )
+            if self._reconciliation is None:
+                self._reconciliation_error = (
+                    "No common day with 24 valid hours from both meters"
+                )
+            else:
+                self._reconciliation_refreshed_at = now
+                self._reconciliation_error = None
         except Exception:  # Recorder availability must not break live power.
+            self._reconciliation = None
+            self._reconciliation_error = "Settled meter comparison could not be refreshed"
             _LOGGER.exception("Could not refresh the settled SRP/EG4 reconciliation")
+
+    def _clear_tigo_alignment(self, reason: str) -> None:
+        self._last_tigo_sample = None
+        self._tigo_aligned_eg4_w = None
+        self._tigo_ratio_percent = None
+        self._tigo_aligned_sample_at = None
+        self._tigo_alignment_skew_seconds = None
+        self._tigo_alignment_reason = reason
 
     async def _async_refresh_tigo_alignment(self, now: datetime) -> None:
         sample_state = self._state(self.sources.tigo_last_cloud_update)
         tigo_power = _power_w(self._state(self.sources.tigo_power))
-        if not _is_valid_state(sample_state) or tigo_power is None:
+        self._tigo_sample_at = _timestamp(sample_state.state) if sample_state else None
+        sample_time = self._tigo_sample_at
+        if (
+            not _is_valid_state(sample_state)
+            or tigo_power is None
+            or tigo_power < 0
+            or sample_time is None
+        ):
+            self._clear_tigo_alignment("Tigo power or sample timestamp is unavailable")
+            return
+        if not -MAXIMUM_FUTURE_SKEW <= now - sample_time <= TIGO_STALE_AFTER:
+            self._clear_tigo_alignment("Tigo sample is stale or its clock is ahead")
             return
         sample_text = sample_state.state
-        if sample_text == self._last_tigo_sample:
-            return
-        sample_time = dt_util.parse_datetime(sample_text)
-        if sample_time is None:
-            return
-        if sample_time.tzinfo is None:
-            sample_time = sample_time.replace(tzinfo=UTC)
-        sample_time = sample_time.astimezone(UTC)
-        if now - sample_time > TIGO_STALE_AFTER:
+        if sample_text == self._last_tigo_sample and self._tigo_aligned_eg4_w is not None:
+            # A provider can revise power without changing its sample timestamp.
+            aligned = self._tigo_aligned_eg4_w
+            self._tigo_ratio_percent = 100.0 * tigo_power / aligned if aligned > 50 else None
             return
         try:
             recorder = get_instance(self.hass)
@@ -390,33 +528,50 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 partial(
                     get_significant_states,
                     self.hass,
-                    sample_time - timedelta(minutes=15),
-                    sample_time + timedelta(minutes=15),
+                    sample_time - TIGO_MAXIMUM_ALIGNMENT_SKEW,
+                    sample_time + TIGO_MAXIMUM_ALIGNMENT_SKEW,
                     [self.sources.eg4_pv_power],
                     include_start_time_state=True,
                     significant_changes_only=False,
-                    no_attributes=True,
+                    no_attributes=False,
                 )
             )
             candidates = history.get(self.sources.eg4_pv_power, [])
             numeric = [
-                (abs((_state_time(state) - sample_time).total_seconds()), _power_w(state))
+                (
+                    abs((_state_time(state) - sample_time).total_seconds()),
+                    _power_w(state),
+                    _state_time(state),
+                )
                 for state in candidates
-                if isinstance(state, State) and _power_w(state) is not None
+                if isinstance(state, State)
+                and _power_w(state) is not None
+                and _power_w(state) >= 0
+                and abs(_state_time(state) - sample_time) <= TIGO_MAXIMUM_ALIGNMENT_SKEW
             ]
             if not numeric:
+                self._clear_tigo_alignment("No EG4 sample within three minutes of Tigo")
                 return
-            _, aligned = min(numeric, key=lambda item: item[0])
+            skew_seconds, aligned, aligned_at = min(numeric, key=lambda item: item[0])
             assert aligned is not None
             self._tigo_aligned_eg4_w = aligned
             self._tigo_ratio_percent = 100.0 * tigo_power / aligned if aligned > 50 else None
+            self._tigo_aligned_sample_at = aligned_at
+            self._tigo_alignment_skew_seconds = skew_seconds
+            self._tigo_alignment_reason = (
+                "Comparable samples"
+                if aligned > 50
+                else "Too little EG4 production for a meaningful ratio"
+            )
             self._last_tigo_sample = sample_text
         except Exception:
+            self._clear_tigo_alignment("EG4 sample history could not be read")
             _LOGGER.exception("Could not align the Tigo sample to EG4 Recorder history")
 
     async def _async_update_data(self) -> HomeEnergySnapshot:
         now = datetime.now(UTC)
         try:
+            enphase = self._enphase_power(now)
             core_sources = {
                 "EG4 PV": (self.sources.eg4_pv_power, EG4_STALE_AFTER),
                 "EG4 AC": (self.sources.eg4_ac_power, EG4_STALE_AFTER),
@@ -429,6 +584,10 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 "EG4 battery": (self.sources.eg4_battery_power, EG4_STALE_AFTER),
                 "EG4 battery SOC": (self.sources.eg4_battery_soc, EG4_STALE_AFTER),
                 "Enphase local": (self.sources.enphase_power, ENPHASE_STALE_AFTER),
+                "Enphase cloud": (
+                    self.sources.enphase_cloud_power,
+                    ENPHASE_CLOUD_STALE_AFTER,
+                ),
             }
             source_ages = {
                 name: self._age_minutes(entity_id, now)
@@ -437,25 +596,30 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
             runtime = _bool_state(self._state(self.sources.eg4_runtime_data))
             connection_lost = _bool_state(self._state(self.sources.eg4_connection_lost))
             eg4_runtime_ok = runtime is not False and connection_lost is not True
-            model_sources_fresh = eg4_runtime_ok and all(
-                self._fresh(entity_id, now, maximum)
-                for entity_id, maximum in (
-                    core_sources["EG4 AC"],
-                    core_sources["EG4 rectifier"],
-                    core_sources["EG4 metered load"],
-                    core_sources["EG4 grid CT"],
-                    core_sources["Enphase local"],
+            model_sources_fresh = (
+                eg4_runtime_ok
+                and enphase.power_w is not None
+                and all(
+                    self._fresh(entity_id, now, maximum)
+                    and _power_w(self._state(entity_id)) is not None
+                    for entity_id, maximum in (
+                        core_sources["EG4 AC"],
+                        core_sources["EG4 rectifier"],
+                        core_sources["EG4 metered load"],
+                        core_sources["EG4 grid CT"],
+                    )
                 )
             )
-            solar_sources_fresh = eg4_runtime_ok and all(
-                self._fresh(entity_id, now, maximum)
-                for entity_id, maximum in (
-                    core_sources["EG4 PV"],
-                    core_sources["Enphase local"],
-                )
+            solar_sources_fresh = bool(
+                eg4_runtime_ok
+                and enphase.power_w is not None
+                and self._fresh(self.sources.eg4_pv_power, now, EG4_STALE_AFTER)
+                and _power_w(self._state(self.sources.eg4_pv_power)) is not None
             )
-            grid_source_fresh = eg4_runtime_ok and self._fresh(
-                self.sources.eg4_grid_power, now, EG4_STALE_AFTER
+            grid_source_fresh = bool(
+                eg4_runtime_ok
+                and self._fresh(self.sources.eg4_grid_power, now, EG4_STALE_AFTER)
+                and _power_w(self._state(self.sources.eg4_grid_power)) is not None
             )
             battery_source_fresh = eg4_runtime_ok and all(
                 self._fresh(entity_id, now, maximum)
@@ -466,6 +630,13 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
             )
 
             raw_battery_w = _power_w(self._state(self.sources.eg4_battery_power))
+            soc_percent = _to_number(self._state(self.sources.eg4_battery_soc))
+            battery_source_fresh = bool(
+                battery_source_fresh
+                and raw_battery_w is not None
+                and soc_percent is not None
+                and 0 <= soc_percent <= 100
+            )
             self._update_battery_samples(now, raw_battery_w)
             average_discharge, p80_discharge, sample_count, sample_span = self._battery_window()
             battery_age = source_ages.get("EG4 battery")
@@ -495,7 +666,7 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                     eg4_yield_lifetime_kwh=_energy_kwh(
                         self._state(self.sources.eg4_yield_lifetime)
                     ),
-                    enphase_power_w=_power_w(self._state(self.sources.enphase_power)),
+                    enphase_power_w=enphase.power_w,
                     enphase_lifetime_kwh=_energy_kwh(
                         self._state(self.sources.enphase_lifetime)
                     ),
@@ -510,6 +681,12 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                     on_peak=_bool_state(self._state(PEAK_ON)),
                     peak_schedule_valid=_bool_state(self._state(PEAK_SCHEDULE_VALID)),
                     peak_minutes_remaining=peak_remaining,
+                    eg4_load_source_fresh=bool(
+                        eg4_runtime_ok
+                        and self._fresh(
+                            self.sources.eg4_metered_load_power, now, EG4_STALE_AFTER
+                        )
+                    ),
                 ),
                 options,
                 now=now,
@@ -520,7 +697,11 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
 
             tigo_reporting = _to_number(self._state(self.sources.tigo_reporting_modules))
             tigo_configured = _to_number(self._state(self.sources.tigo_configured_modules))
-            tigo_age = _to_number(self._state(self.sources.tigo_cloud_age))
+            tigo_age = (
+                max(0.0, (now - self._tigo_sample_at).total_seconds() / 60.0)
+                if self._tigo_sample_at is not None
+                else None
+            )
             tigo_problem = bool(
                 tigo_reporting is not None
                 and tigo_configured is not None
@@ -538,6 +719,10 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
             )
 
             issues: list[str] = []
+            if enphase.cloud_fallback:
+                issues.append(
+                    "Local Envoy unavailable; using timestamped Enphase cloud estimate"
+                )
             if not model_sources_fresh:
                 issues.append("Whole-home balance sources are unavailable or stale")
             if not solar_sources_fresh:
@@ -547,7 +732,7 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
             if not battery_source_fresh:
                 issues.append("Battery power or SOC telemetry is unavailable or stale")
             if model_sources_fresh and not calculation.model_valid:
-                issues.append("The certified AC-bus balance is outside tolerance")
+                issues.append("The internal EG4 AC-bus consistency check is outside tolerance")
             if tigo_problem:
                 issues.append(
                     f"Tigo reports {int(tigo_reporting or 0)} of "
@@ -565,6 +750,13 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 age = dt_util.as_local(now).date() - self._reconciliation.day
                 if age.days > 2:
                     issues.append("SRP settled reconciliation is stale")
+                if not self._reconciliation.matches:
+                    issues.append(
+                        "EG4 and SRP net energy differ outside the configured tolerance "
+                        f"for {self._reconciliation.day.isoformat()}"
+                    )
+            if self._reconciliation_error:
+                issues.append(self._reconciliation_error)
 
             telemetry_healthy = (
                 model_sources_fresh
@@ -572,10 +764,11 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 and grid_source_fresh
                 and battery_source_fresh
                 and calculation.model_valid
+                and not enphase.cloud_fallback
             )
             source_health = (
                 "unavailable"
-                if not telemetry_healthy
+                if not (model_sources_fresh and solar_sources_fresh and calculation.model_valid)
                 else "healthy"
                 if not issues
                 else "degraded"
@@ -587,7 +780,12 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 telemetry_healthy=telemetry_healthy,
                 source_ages_minutes=source_ages,
                 issues=tuple(issues),
-                tigo_power_w=_power_w(self._state(self.sources.tigo_power)),
+                tigo_power_w=(
+                    _power_w(self._state(self.sources.tigo_power))
+                    if self._tigo_sample_at is not None
+                    and -MAXIMUM_FUTURE_SKEW <= now - self._tigo_sample_at <= TIGO_STALE_AFTER
+                    else None
+                ),
                 tigo_reporting_modules=(
                     int(tigo_reporting) if tigo_reporting is not None else None
                 ),
@@ -622,6 +820,17 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
                 ),
                 peak_minutes_remaining=peak_remaining,
                 options=options,
+                enphase_power_source=enphase.source,
+                enphase_power_entity=enphase.entity_id,
+                enphase_power_w=enphase.power_w,
+                enphase_sample_at=enphase.sampled_at,
+                enphase_cloud_fallback=enphase.cloud_fallback,
+                tigo_sample_at=self._tigo_sample_at,
+                tigo_aligned_sample_at=self._tigo_aligned_sample_at,
+                tigo_alignment_skew_seconds=self._tigo_alignment_skew_seconds,
+                tigo_alignment_reason=self._tigo_alignment_reason,
+                reconciliation_refreshed_at=self._reconciliation_refreshed_at,
+                reconciliation_error=self._reconciliation_error,
             )
         except Exception as err:
             raise UpdateFailed(f"Could not calculate whole-home energy: {err}") from err
