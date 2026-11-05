@@ -2,7 +2,7 @@
 
 This project turns Jeremy's EG4, Enphase, Tigo, battery, and SRP data into one combined whole-property energy view.
 
-The central rule is simple: **EG4's grid CT is the selected live net reading at the utility boundary.** EG4 and Enphase are separate solar arrays. Tigo watches the EG4 panels only, so Tigo must never be added as a third source of solar production. SRP's separate “usage” and “production” totals do not match this behind-the-meter wiring; only SRP net energy is used to check the EG4 grid CT.
+The central rule is simple: **EG4's grid CT is the selected live net reading at the utility boundary.** EG4 and Enphase are separate solar arrays. Tigo watches the EG4 panels only, so Tigo must never be added as a third source of solar production. SRP's separate consumption/generation fields have not been verified as independent import/export or array-production measurements. Only its signed net energy is used to check the EG4 grid CT.
 
 ## Dashboard
 
@@ -20,23 +20,23 @@ Views:
 
 The existing **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)** page remains a separate equipment page. Enphase and Tigo keep their own detailed pages as well.
 
-All EG4 equipment detail — the inverter dashboard and, now, per-cell battery data read straight from the EG4 WiFi dongle on the LAN (max/min cell voltage, cell delta, pack capacity, module count) via its own local Home Assistant integration — lives in the dedicated **[eg4_home_assistant](https://github.com/JeremyWhittaker/eg4_home_assistant)** project. This whole-property project treats EG4 as one source among several and does not duplicate that equipment view; for anything about the EG4 inverter or batteries themselves, go there.
+The dedicated [EG4 project](https://github.com/JeremyWhittaker/eg4_home_assistant) owns inverter and battery detail. This project combines EG4 with the separate Enphase array and utility data. On November 4 the local dongle readings were unavailable; cloud readings supplied the working EG4 monitoring and seasonal controller.
 
-Initial commissioning completed on August 30, 2026, and Peak Controls was commissioned on August 31. Home Assistant 2026.8.3 reports the integration loaded and the seven-view dashboard/alert set stable. The automatic A/C response master was enabled on September 4, 2026, after the September 3 peak produced a live forecast alert; all three zones participate at the commissioned +2°F and 25% SOC guardrail. See *Peak Controls* below for what the guardrail costs in practice. For the latest complete common day, August 29, SRP recorded 128.4 kWh net import while the EG4 CT derived 127.5 kWh; the -0.9 kWh residual is comfortably inside the 8.105 kWh tolerance.
+Initial commissioning took place on August 30–31, 2026. The combined dashboard and seasonal controller were rebuilt and deployed on November 4; **0.2.1 remains the live component at this November 5 checkpoint**. Reviewed dashboard and alert configuration is deployed with exact readback; all 28 desktop/mobile light/dark cases passed, and representative flow captures were inspected. Controller and measurement Python corrections await installation; **0.2.2 has not been released**. See [Commissioning](docs/COMMISSIONING.md) for dated acceptance and remaining checks.
+
+The November 5 05:00 battery start was not proven: reported charging was followed by unavailable readings. A later watch recorded 109 qualified peak-demand observations with battery support. The 09:00 watch confirmed off-peak non-discharge and charger permission release, but solar had already caused reported battery charging before 09:00, so a timer-caused stop was not isolated. These results do not establish savings or actual EV energy gain.
 
 ## The system in one picture
 
 ```text
-EG4 panels ──> EG4 18KPV ──┐
-  └─ Tigo module monitors  │
-                           ├── 240 V AC bus ──> EG4 whole-property grid CT ──> SRP meter
-Enphase panels ─> Envoy ───┘                         │
-                                                    ├─ import from SRP (+)
-Two EG4 batteries ─> backup panel                   └─ export to SRP (−)
-  └─ A/C units and other backed-up circuits
+EG4 panels + Tigo ──DC──> EG4 inverter <──> batteries
+                              ├──> local backup loads (unmetered separately)
+                              └──> shared AC connection <── Enphase array
+                                           ├──> main-panel loads (unmetered separately)
+                                           └──> service-line CTs <──> SRP meter
 ```
 
-Tigo currently reports **43 of 44** modules; position **C4** is the known long-term outage. The two EG4 batteries provide roughly **28 kWh nominal** storage and normally stop supplementing the home at **20% SOC**.
+The November 4 Tigo observation was **43 of 44** modules reporting; position **C4** is the known long-term outage. The two EG4 batteries provide roughly **28 kWh nominal** storage and normally stop supplementing the home at **20% SOC**.
 
 ## What the headline numbers mean
 
@@ -52,6 +52,8 @@ Tigo currently reports **43 of 44** modules; position **C4** is the known long-t
 The dashboard does **not** claim separate backup-panel and regular-panel loads. No installed sensor measures that boundary independently. A dedicated CT/submeter is required to add that split honestly.
 
 ## Alerts
+
+The reviewed alert configuration is deployed. Its controller/measurement dependency changes await the Python component update at this checkpoint; natural failure and boundary observations remain separate acceptance.
 
 Three alert automations notify the existing `script.notify_family` targets and create a persistent Home Assistant notification:
 
@@ -69,7 +71,7 @@ The response preserves HVAC modes and snapshots each target before changing it. 
 
 ## Automatic inverter scheduling
 
-Version 0.2 adds a separate **Automatic EG4 schedule** switch. It starts off, persists its choice and uses the existing loaded EG4 cloud client; it stores no additional login. The shared SRP calculator must be enabled, recent, consistent with the E-15 calendar and configured for America/Phoenix. The inverter RTC offset must stay within ±120 seconds of its response receipt. Runtime frames and clock-response receipts must be no older than 120 seconds, with future runtime/receipt timestamps rejected. These are separate readback guards and diagnostics; a recent cloud poll does not prove recent inverter telemetry.
+The deployed 0.2.1 controller provides a separate **Automatic EG4 schedule** switch. It starts off, persists its choice and uses the existing loaded EG4 cloud client; it stores no additional login. The shared SRP calculator must be enabled, recent, consistent with the E-15 calendar and configured for America/Phoenix. The reviewed source below separates the previously combined clock diagnostics: the inverter RTC offset must stay within ±120 seconds of its response receipt. Runtime frames and clock-response receipts must be no older than 120 seconds, with future runtime/receipt timestamps rejected. These are separate readback guards and diagnostics; a recent cloud poll does not prove recent inverter telemetry.
 
 | Calendar | Inverter behavior |
 |---|---|
@@ -112,9 +114,9 @@ uv run --python 3.12 --extra test pytest -q
 
 See [Topology](docs/TOPOLOGY.md), [Measurement model](docs/MEASUREMENT_MODEL.md), [Peak strategy](docs/PEAK_STRATEGY.md), [Commissioning](docs/COMMISSIONING.md), and [Operations](docs/OPERATIONS.md).
 
-## November 4 measurement corrections
+## Measurement corrections and limits
 
-The utility comparison now requires 24 distinct valid hourly intervals and reports separate net-energy and gross-flow tolerances. The net comparison uses the larger of 1 kWh or 2% of the larger absolute net reading; a broad gross-flow tolerance no longer hides a material net discrepancy. Missing or failed comparison data clears the cached result.
+The utility comparison requires 24 distinct valid hourly intervals from each source. It checks **net energy only**, using the larger of 1 kWh or 2% of the larger absolute net reading. Gross-flow percentages are context, not a second match allowance. Separate SRP import and export remain unvalidated. The newest complete utility day may still be revised; missing or failed comparison data clears the cached result. Agreement does not independently calibrate either meter.
 
 Source ages are labelled **HA report age**, with no age supplied for unusable or incorrectly unit-labelled values. A recent report does not prove a recent vendor frame. Net comparison equality includes only a 1e-9 kWh allowance for binary arithmetic, without changing the 1 kWh/2% physical tolerance.
 

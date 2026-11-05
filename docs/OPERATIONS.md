@@ -64,13 +64,13 @@ If Home Assistant has opened an SRP reauthentication flow, update the existing e
 
 ### SRP and EG4 do not match
 
-Check that the reconciliation date is complete, has at least 20 SRP intervals, and is not older than two days. Small daily differences are expected from interval boundaries and meter timing. Investigate repeated residuals outside the displayed greater-of-1-kWh-or-5% tolerance.
+Require 24 distinct valid hourly intervals from each source for the same Phoenix day. Compare net energy only with the larger of 1 kWh or 2% of the larger absolute net reading; gross-flow percentages do not provide a second allowance. The newest complete utility day may still be revised. Investigate persistent exceptions without treating a net match as calibration or separate import/export validation.
 
 ### Alert did not fire at 20%
 
 Verify the reserve binary sensor changed from off to on and the alert automation is enabled. The dedicated automation handles exact 20%; the older generic daily digest checks strictly below 20 and is not part of this strategy.
 
-Each alert also reconciles every five minutes and stores its last AM/PM peak-window key in an `input_text.home_energy_*_alert_key` helper. This recovers conditions that were already active at restart without repeating the same alert throughout the window.
+The existing reserve/forecast/import alerts reconcile every five minutes and store their last AM/PM window key. New persistent failure diagnostics have their own timing and incident latches; see [Peak failure diagnostics](#peak-failure-diagnostics). A restart resets their ten-minute continuity timer rather than claiming unobserved coverage.
 
 ### Peak Controls did not adjust a thermostat
 
@@ -85,7 +85,7 @@ Check the controller audit on the Peak Controls tab. The expected safe skip reas
 
 ### A thermostat was not restored
 
-This is normally intentional. Peak Controls restores only a zone it still owns. A person or another automation changing the target or HVAC mode releases ownership, so the later 8 PM or 9 PM routine cannot be undone. The audit status identifies an externally changed zone.
+This is normally intentional. Peak Controls restores only a zone it still owns. A person or another automation changing the target or HVAC mode releases ownership, so the later actual peak-end/comfort routine cannot be undone. The audit status identifies an externally changed zone.
 
 If the master is off and the controller audit still says active for more than one minute, keep the master off and inspect the three owned flags plus the response/release automation traces before changing any internal helper.
 

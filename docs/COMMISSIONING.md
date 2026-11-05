@@ -1,180 +1,75 @@
-# Commissioning checklist
+# Commissioning and acceptance
 
-## Commissioned live state
+## Release and deployment state — November 5, 2026
 
-Commissioning completed on August 30, 2026. Open the installed dashboard at:
+The first installation was commissioned August 30, 2026; Peak Controls followed August 31. Those dated checks establish the original installation, not current runtime health or the later seasonal controller.
 
-- **Home Energy:** `http://172.16.106.12:8123/home-energy/whole-home`
-- **EG4 Solar & Battery:** `http://172.16.106.12:8123/eg4-energy/live`
+The November 4 rebuild deployed the combined dashboard and automatic EG4 winter controller **0.2.1**. At this checkpoint 0.2.1 remains live. Reviewed dashboard/alert configuration has exact readback with 11 dashboard and 103 automation template checks. All 28 desktop/mobile light/dark browser cases passed, with 80 screenshots and zero browser errors. The browser profile cleanup subsequently hit a file-removal race; the exact profile was removed after proving no owned browser remained, and bounded cleanup retries were added. Controller/model Python corrections await installation; **0.2.2 is not released**.
 
-Home Assistant 2026.8.3 reports the Home Energy config entry as `loaded`. The August 31 Peak Controls deployment round-tripped with 7 views, 131 cards, 65 referenced entities, 7 dashboard templates, and 80 automation templates.
+- [Home Energy](http://172.16.106.12:8123/home-energy/whole-home)
+- [EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)
 
-The latest complete common meter day is **August 29, 2026**:
+The master starts off on a new installation, but the actual inverter master was enabled November 4 after reviewed readback. Re-deployment must preserve existing master/helper values; it is not an instruction to turn them off or reset household thermostat targets.
 
-| Reading | Energy |
-| --- | ---: |
-| SRP settled net import | 128.4 kWh |
-| EG4 CT import | 144.8 kWh |
-| EG4 CT export | 17.3 kWh |
-| EG4 CT net import | 127.5 kWh |
-| EG4 minus SRP residual | -0.9 kWh |
-| Displayed tolerance | 8.105 kWh |
+## Dated evidence and its limits
 
-All 24 SRP hourly intervals were present, so the reconciliation status is **match**. Model-valid, required-telemetry, SRP-available, and meter-match flags were all on after the final restart.
+| Observation | Result | Limit |
+| --- | --- | --- |
+| August 30–31 original deployment | Loaded entry, seven views, idempotent helper/automation deployment; 28 desktop/mobile light/dark cases passed | Historical build/runtime evidence only; old 6–8 PM window and gross-energy tolerance are superseded |
+| September 4 cooling-risk enablement | Existing A/C response master enabled after the prior evening's reserve/forecast alerts | Not proof of every future intervention, mode or thermostat provider response |
+| November 4 dashboard/source rebuild | Seven unified views and detailed equipment routes received dated visual checks; local Enphase aggregate restored | Tigo discrepancy and unavailable local EG4 dongle readings remain unresolved |
+| November 4 winter settings apply after 17:00 | 49 targets read back, 392 saved weekly fields unchanged and 32 protected fields preserved | Applying after peak start did not test the 17:00 boundary |
+| November 4 evening and overnight | Retained peak discharge and off-peak non-discharge observed; overnight SOC 46%→74% | Vendor-reported evidence; no independent metering or savings claim |
+| November 5 original 05:00 start watch | **FAIL:** early reported charging followed by missing measurements; 130 fresh records below 140 required | Natural peak-start behavior not proven; preserve this failure |
+| November 5 later 05:33–09:19 watch | **READY:** 109 qualified peak-demand observations all showed battery support; 207 peak charger-stop records | This later success does not repair the earlier 05:00 failure or 05:20–05:33 gap |
+| November 5 end-of-peak window | Five 09:07–09:11 non-discharge records and two 09:18–09:19 EV permission-release records | Battery charging began 07:43 with solar surplus, so timer-caused 09:00 stop was not isolated; no actual EV gain proven |
+| Reviewed source corrections | Strict separate clock/frame diagnostics, recovery/preview/retry fixes, forecast/failure reporting and numeric equality regressions pass | Await supported deployment, UI checks and fresh runtime evidence |
 
-Final visual QA covered every unified view at 1440×1000 and 390×844 in both light and dark themes: 28 cases, 72 full-scroll screenshots, zero Lovelace error cards, and zero browser errors. Human review covered the new Peak Controls page in both themes and both viewport sizes. The Home Assistant log contained no relevant Home Energy errors.
+The reviewed net comparator requires 24 distinct valid hourly intervals per source and uses max(1 kWh, 2% of the larger absolute net). Replaying 324 eligible historical days yields 287 within tolerance and 37 exceptions after correcting six tiny numeric equality cases. Separate utility import/export remain unvalidated. The newest complete SRP day may still be revised.
 
-## 1. Install the integration
+## Updating an existing installation
 
-Run from the repository root:
-
-```bash
-export HA_BASE_URL='http://homeassistant.local:8123'
-export HA_TOKEN='your-long-lived-administrator-token'
-./scripts/install-integration-privileged.sh
-```
-
-Why privilege is required: `/config/custom_components` is owned by root and mode 0755 on this appliance. The regular `jeremy` SSH account can read it but cannot create a new component directory.
-
-The currently installed component directory is owned by `jeremy`, so ordinary read-only checks and direct updates to existing writable files do not need privilege. The installer still uses privilege for its recoverable directory-level swap because that operation writes to the root-owned parent directory.
-
-The installer:
-
-1. Builds a token-free archive in a local temporary file.
-2. Copies it to an explicit remote temporary path using legacy SCP transport because this appliance's SSH add-on does not advertise SFTP.
-3. Uses `sudo` only for the root-owned Home Assistant component path.
-4. Moves any prior component to a timestamped backup under `/config/.home_energy_monitor_deployments`, outside the directory Home Assistant scans for integrations.
-5. Validates configuration and requests restart through Home Assistant's authenticated API; the SSH add-on's `ha` CLI cannot access the Supervisor API from this user session.
-6. Waits up to three minutes for authenticated `/api/config` health after restart and, on an upgrade, requires the pre-existing `home_energy_monitor` config entry to return to `loaded`.
-7. Restores the prior directory on validation/entry-health failure, restarts again, verifies both Core and prior-entry recovery, and retains the failed copy for inspection.
-
-## 2. Deploy the Home Assistant objects
+1. Record the actual loaded config entry, installed version, exact component files and current helpers/masters. Preserve a private backup and rollback plan.
+2. Check ownership. On November 4 the component directory was writable while its parent was protected; supported in-place updates did not require a privileged directory swap. Use the audited privileged installer only when the actual target requires it.
+3. Validate source/configuration, apply the reviewed component, restart through supported Core controls when Python changed, and require authenticated health plus the same existing config entry returning loaded. Do not create duplicate entries or edit `.storage` while Core runs.
+4. Deploy dashboard/helper/automation changes through the existing owner:
 
 ```bash
 node deploy.mjs
-```
-
-Expected objects:
-
-- one `home_energy_monitor` config entry;
-- 29 calculated/normalized sensors and 9 binary quality/risk sensors;
-- editable planning plus Peak Controls helpers and persisted alert/controller latches;
-- three `automation.home_energy_*` alert automations and three master-gated A/C ownership automations;
-- one storage-mode `home-energy` dashboard with seven views.
-
-The exact entity IDs are discovered and verified after Home Assistant creates them; the deployment does not commit serial-bearing source IDs.
-
-## 3. Validate
-
-```bash
 node deploy.mjs --check
 ```
 
-Then verify in the UI:
+5. Compare installed hashes/version and fresh state with the intended release. A successful API response or restart alone is not deployment acceptance.
+6. Require a second idempotent check, relevant desktop/mobile light/dark rendering, no missing/error cards, and meaningful template/schema checks. The November 5 copy revision passed its 28-case live rendering gate; later changes need their own checks.
 
-- `/home-energy/whole-home` renders without error cards on desktop and mobile;
-- combined solar is close to EG4 PV plus local Enphase power;
-- whole-home load is close to EG4 vendor-calculated load plus Enphase power;
-- grid net direction matches the EG4 equipment page;
-- battery positive means discharge and negative means charge;
-- Tigo shows 43/44 and names C4 as the known outage;
-- SRP shows delayed utility data without affecting live EG4 grid/battery alerts;
-- alert automations are enabled;
-- `/home-energy/peak-controls` shows 6:00–8:00 PM, 25%, +2°F, all three selected zones, 80°F caps, and conditional restoration;
-- the automatic A/C response master is off after deployment;
-- all three thermostat target temperatures are unchanged by deployment.
+For a new root-owned installation, follow the audited installer and [Operations](OPERATIONS.md#safe-redeployment). Do not require a privileged swap merely because the parent directory is protected when the approved update uses already-owned component files.
 
-## 4. Confirm SRP health
+## Current monitoring and control contract
 
-The Aug 28–30 SRP outage recovered without a credential change. The recorder shows the current-demand entity became unavailable at **Aug 28, 9:04 PM Arizona time** and recovered at **Aug 30, 1:46 PM**. On the Aug 30 audit:
+- Keep existing entity IDs, dashboard URLs, saved master choices and helper values.
+- Show unavailable dependent readings rather than zeros. Local Enphase loss must not suppress independently usable battery/grid alerts.
+- Label combined solar as mixed EG4 DC/Enphase AC; Tigo is excluded from additive production.
+- Grid and battery signs must agree with their equipment pages. No separate backup/main-panel wattages are invented.
+- Reserve is inclusive at 20%. Existing 5 kW / five-minute import protection and conservative HVAC guard are unchanged.
+- The reviewed household shortfall message requires valid central and conservative estimates both to reach reserve before peak end.
+- Four reviewed failure automations create persistent HA diagnostics only, with bounded incident/window latches. No new push recipients or device-control actions are introduced.
+- Peak Controls uses actual valid SRP peaks, including both winter windows, and acts only while home. Modes/manual targets are preserved; still-owned targets restore before comfort scheduling takes over.
+- A displayed thermostat target is not a later provider acknowledgment or room-comfort result. The 05:00 target reversion and later independently confirmed recovery stay separate evidence.
+- Turning inverter control off stops new changes but retains the programmed inverter settings. See [one-step rollback](OPERATIONS.md#one-step-rollback-and-original-summer-baseline) before recovery work.
 
-- the existing `srp_energy_monitor` config entry was `loaded`;
-- no SRP reauthentication flow existed;
-- all six SRP entities were available;
-- current demand was 6.3 kW and the feed reported data through Aug 29;
-- the live component files exactly matched the repository version.
+## Next natural and hardware checks
 
-The restart removed the detailed failure log, so the original HTTP response cannot be proven after the fact. The unchanged credentials and automatic recovery rule out an ongoing bad-password condition and point to a transient SRP/API access failure. The installed SRP client treats an access-denied 403 as retryable and reserves reauthentication for an explicit 400/401 rejection.
+| Check | Status / required evidence |
+| --- | --- |
+| Natural 17:00 peak start | Deferred: aligned HA flow plus fresh vendor origin timestamp, voltage/frequency and charger gates |
+| November 7 midnight/weekend | Deferred: verify switched settings, midnight endpoint behavior and daytime AC/PV overlap without unintended discharge |
+| November 9 weekday return | Deferred: midnight recipe/readback and following 05:00 start |
+| November 26/27 holiday and return | Deferred: preserved-table/readback checks and natural dispatch behavior |
+| Summer/season boundaries | Deferred: native weekly preservation and later actual May/October transitions |
+| Already-home bedtime and risk intervention/release | Deferred: provider-confirmed targets, ownership/trace evidence and manual-change preservation; do not force hardware merely to create a test |
+| Utility agreement | Partial: net-only historical comparison with 37 exceptions; no independent directional calibration |
+| Actual EV energy | Blocked by unreliable Orange current measurement and offline Grey; state/permission alone is insufficient |
+| Panel split and Tigo discrepancy | Blocked by missing independent panel meters and unresolved source discrepancy |
+| Local EG4 dongle | Unavailable in the November 4 observation; no speculative register writes |
 
-Do **not** reauthenticate merely because an SRP entity becomes temporarily unavailable. Reauthenticate the existing entry only when Home Assistant opens an SRP reauthentication flow or the SRP integration log records an explicit 400/401 credential rejection. Never create a second account entry. After any extended outage, allow one complete Arizona calendar day before expecting settled reconciliation.
-
-## 5. Test notifications safely
-
-Use Home Assistant's automation **Run actions** control only for the three alert automations while watching both the persistent notification and family targets. Do not manually run the HVAC response, override, or release automations. Do not lower the live threshold solely to create a long peak import unless you intend to receive that alert.
-
-## 6. Commission Peak Controls
-
-Before deployment, record each climate entity's mode and target. Run `node deploy.mjs`, then verify:
-
-1. The new page is `/home-energy/peak-controls`.
-2. The master is `off` and controller active is `off`.
-3. The defaults are 6:00–8:00 PM, 25% SOC, +2°F, all zones enabled, 80°F zone caps, and restoration enabled.
-4. The three climate modes and target temperatures exactly match the pre-deployment snapshot.
-5. All generated automation and dashboard templates render through the live Home Assistant template engine.
-6. All six Home Energy automations are enabled, while climate service calls remain blocked by the master.
-7. A second `node deploy.mjs --check` round-trips helpers, automations, and the seven-view dashboard unchanged.
-
-Complete desktop/mobile light/dark visual QA before enabling the master. During the first live peak event, watch traces and confirm the controller reports only selected zones as owned. Turn the master off immediately if the live behavior differs from the documented rule.
-
-### August 31, 2026 live result
-
-- A private transaction backup was written before mutation.
-- The deployer created 24 Peak Controls helpers and verified all 22 helpers with create-only defaults.
-- The master, controller-active flag, and all three ownership flags were `off` after deployment.
-- Defaults round-tripped as 6:00–8:00 PM, 25% SOC, +2°F, all three zones enabled, 80°F caps, and restoration enabled.
-- The three climate targets remained exactly 70°F, 70°F, and 72°F; modes, presets, and fan modes were also unchanged.
-- All six Home Energy automations were enabled. The response trace stopped at the disabled-master condition and made no climate service call.
-- A second normal deploy was idempotent: 0 helper changes, 0 automation changes, and the dashboard was unchanged.
-- `node deploy.mjs --check`, all 80 automation templates, all 7 dashboard templates, and the seven-view dashboard round-trip passed.
-- Visual QA passed 28 route/device/theme cases and 72 full-scroll screenshots with no error cards or browser errors.
-
-The automatic A/C response master intentionally remains **off**. Alerts and risk calculations continue while automatic thermostat control is disabled.
-
-### September 4, 2026 — automatic A/C response enabled
-
-The master was turned on at 10:00 MST, ahead of that day's 18:00-20:00 control window. This is
-the first time Peak Controls has been permitted to make a thermostat call.
-
-What prompted it: the 2026-09-03 peak was the first live event that exercised the whole rule.
-`Home Energy — battery may not last through peak` fired at 19:02 MST and
-`Home Energy — battery reached reserve` at 20:00 MST. Both ran as designed; no climate service
-call was made, because the master was still off.
-
-State recorded at enablement:
-
-- Master `on`; controller active `off`; all three ownership flags `off`; status `unknown`.
-- Window 18:00-20:00, SOC guardrail 25%, increase +2°F, zone caps 80/80/80°F, all three zones
-  enabled, restoration enabled — all unchanged from the August 31 commissioning.
-- SRP on-peak `off` and outside the control window at the time of the change, so the enable
-  could not activate anything mid-flight. Schedule valid `on`. Battery SOC 100%.
-- All three climates in `cool` with numeric targets: 75°F downstairs, 72°F primary bedroom,
-  74°F upstairs. The 18:00 schedule routine sets its own targets before the window opens, so
-  those are the values the controller will raise from, not these.
-
-Known limitation accepted at enablement: with the guardrail at 25% and the discharge rate
-measured on September 3, the response has roughly seven minutes of usable action on a night
-like that one. The guardrail was deliberately left unchanged; see
-*How the SOC guardrail interacts with discharge rate* in `PEAK_STRATEGY.md` for the measured
-trade-off and what raising it would buy.
-
-What to check after the first event that actually fires:
-
-1. The persistent notification names the activation reason and only the zones it owned.
-2. Each owned zone's applied target equals `min(original + 2, zone cap, thermostat max)`.
-3. Ownership released and the original target restored at 20:00, before the 20:00 routine.
-4. Any zone changed manually mid-window was released and never written back.
-5. `input_text.home_energy_hvac_controller_status` tells a coherent story end to end.
-
-Turn the master off immediately if live behaviour differs from the documented rule.
-
-## Acceptance criteria
-
-- Model-valid and telemetry-healthy flags are on when sources are fresh.
-- Whole-home balance residual is inside its displayed tolerance.
-- Missing Enphase or EG4 data makes dependent results unavailable, not zero.
-- The 20% condition is inclusive.
-- Peak import requires five continuous minutes.
-- Forecast/import alerts run only inside the configured window and a valid active SRP peak.
-- The HVAC master defaults off and deployment does not change climate targets.
-- Manual/scheduled target changes release ownership and are never overwritten during restoration.
-- Dashboard, helpers, and automations round-trip identically on a second deploy.
+Do not use “Run actions” on alert/control automations as a routine commissioning shortcut. It bypasses normal conditions and can send messages or operate equipment. No live notification or hardware test was performed for this source slice; any deliberate test needs its own explicit scope and expected result.

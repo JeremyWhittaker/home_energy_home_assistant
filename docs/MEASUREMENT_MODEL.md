@@ -1,85 +1,86 @@
 # Measurement model
 
-## Quality labels
+## Quality and timing
 
-- **Measured:** direct device telemetry at a known physical point.
-- **Derived:** deterministic arithmetic using measured inputs with a validation equation.
-- **Estimated:** useful, but includes an assumption or mixed measurement basis.
-- **Utility settled:** delayed revenue-meter or billing data, not live power.
+- **Measured:** source-device telemetry at the stated boundary; it is not independent calibration.
+- **Derived:** arithmetic from source readings. An internal consistency check can reject contradictory data but cannot validate a separate meter by itself.
+- **Estimated:** an assumption or mixed measurement basis is involved.
+- **Utility reported:** delayed SRP intervals/billing context. Existing entities retain their “Utility settled” classification, but the newest complete day may still be revised.
 
-Missing or stale required data remains unavailable. It is never silently replaced with zero.
+Missing, stale or unusable required data stays unavailable, never zero. Freshness is evaluated by dependency: Enphase loss prevents combined solar and whole-home load, while independently usable EG4 battery/grid data can still support critical alerts.
 
-Freshness is evaluated by dependency, not with one global gate. Enphase loss makes combined solar and whole-home load unavailable, but it does not suppress an independently fresh EG4 grid-import or battery-reserve alert. Likewise, stale battery telemetry does not hide a valid whole-home load or grid reading.
+Source diagnostics label **HA report age**. Invalid numbers or units have no age in the reviewed source. A recent report can repeat an old vendor frame; independent acceptance must inspect the frame's origin timestamp. The inverter controller separately checks its RTC offset, runtime-frame age and receipt provenance; see [Operations](OPERATIONS.md#clock-and-frame-diagnostics).
 
 ## Sign conventions
 
 | Signal | Positive | Negative |
 | --- | --- | --- |
-| EG4 signed grid | Import from SRP | Export to SRP |
-| EG4 raw battery | Charging | Discharging |
+| EG4 signed service-grid power | Import from SRP | Export to SRP |
+| EG4 raw battery power | Charging | Discharging |
 | Dashboard battery net | Discharging | Charging |
 
-## Certified live equations
+Zero service-grid net exchange does not mean the mains is disconnected. Grid-presence flags are screening evidence, not an independent voltage measurement.
 
-Seven days of timestamp-aligned history established this EG4 identity:
+## Live equations and boundaries
+
+The August timestamp-aligned audit supported this **internal EG4 identity**:
 
 ```text
-EG4 Consumption = EG4 AC + signed Grid − Rectifier
+EG4 vendor Consumption = EG4 AC + signed Grid − Rectifier
 ```
 
-Because Enphase joins outside the EG4 production measurement but inside the whole-property grid CT:
+Enphase joins outside EG4 production measurement but inside the service-line CT boundary:
 
 ```text
 Whole-home load
-  = EG4 Consumption + Enphase AC
+  = EG4 vendor Consumption + Enphase AC
   = EG4 AC + Enphase AC + signed Grid − Rectifier
 ```
 
-The integration calculates both forms. If the EG4 identity residual exceeds the greater of 100 W or 3% of the dominant signal, the whole-home model fails closed.
+The two forms reuse the same inverter measurements. Their agreement is not independent proof of utility agreement or either panel's load. An internal residual outside the larger of 100 W or 3% of the dominant signal makes the dependent whole-home model unavailable.
 
 ```text
 Combined AC supply = EG4 AC + Enphase AC
-
 Combined solar estimate = EG4 PV DC + Enphase AC
-
 Grid import = max(signed Grid, 0)
 Grid export = max(−signed Grid, 0)
-
 Dashboard battery net = −EG4 raw battery power
 ```
 
-The combined solar headline is intentionally **Estimated**: EG4 exposes array-side DC while the Envoy exposes Enphase AC. Combined AC supply is the like-for-like alternative.
+Combined solar mixes EG4 panel-side DC with Enphase AC, so it remains an estimate. EG4 local backup loads consume energy before the main-panel branch; neither branch is independently metered. Local consumption does not excuse a discrepancy between two aligned measurements at the same utility boundary.
 
-## Battery forecast
+All EG4 panels have Tigo monitoring, including the known C4 outage. Tigo is excluded from the combined total to avoid counting EG4 panels twice. The unresolved roughly half-size Tigo/EG4 comparison is DC-panel diagnostic evidence; local AC loads do not explain away that difference. No scaling correction is applied.
+
+## Battery forecasts and protection
 
 ```text
-energy above reserve
-  = 28 kWh × max(SOC − 20%, 0) / 100
-
-central minutes
-  = 60 × energy above reserve / trailing-15-minute mean discharge kW
-
-conservative minutes
-  = 60 × 95% × energy above reserve
-    / max(trailing-15-minute p80 discharge, 7 kW planning discharge)
+energy above reserve = 28 kWh × max(SOC − 20%, 0) / 100
+central minutes = 60 × energy above reserve / recent mean discharge kW
+conservative minutes = 60 × 95% × energy above reserve
+                       / max(recent p80 discharge, 7 kW planning value)
 ```
 
-The forecast is valid only with at least five fresh samples spanning at least eight minutes and meaningful discharge of at least 0.3 kW. Exact 20% SOC returns zero minutes instead of falling through the old “less than 20” gap.
+The 15-minute sample window needs at least five valid samples spanning eight minutes and meaningful discharge of at least 0.3 kW. Exact 20% SOC returns zero reserve minutes. The nominal capacity and reserve are configured assumptions, not measured usable capacity.
 
-## SRP reconciliation
+The conservative shortfall binary still governs the separate HVAC risk response. The reviewed household warning and shortfall headline require valid **central and conservative** estimates both to reach reserve before peak ends. A conservative planning-floor-only shortfall does not warn the household. These source corrections await deployment at the November 5 checkpoint; reserve and import protection are preserved.
 
-The integration ignores the external statistic's cumulative `sum`, which can be inflated when a source refetches/replaces its latest interval. It groups the raw hourly `state` values by Arizona calendar date:
+## SRP reconciliation: net energy only
+
+The current comparison ignores the external statistic's cumulative sum, which can be distorted by refetch/replacement. It uses raw hourly values grouped by Phoenix calendar date:
 
 ```text
-SRP daily net = sum(raw SRP hourly net states)
-EG4 daily net = daily import-counter change − daily export-counter change
+SRP daily net = sum(24 distinct valid SRP hourly net states)
+EG4 daily net = sum(import-counter changes) − sum(export-counter changes)
 Residual = EG4 daily net − SRP daily net
+Tolerance = max(1 kWh, 2% × max(abs(SRP net), abs(EG4 net)))
 ```
 
-A day needs at least 20 SRP hourly intervals. The commissioned match tolerance is the greater of 1 kWh or 5% of EG4 import-plus-export throughput.
+Each source must supply 24 distinct valid hours; duplicate hours cannot fill a gap. The reviewed numerical comparison allows only 1e-9 kWh of binary arithmetic residue at equality. This does not widen the physical allowance. Gross-flow residual percentages are diagnostic context, not a second tolerance or directional validation.
 
-In the audited Aug 25–27 sample, 72 matched hourly intervals had median residual 0 kWh, MAE 0.822 kWh, p95 absolute error 1.5 kWh, and correlation 0.9518. Complete daily residuals were approximately −0.5, +0.7, and +1.4 kWh.
+**Separate SRP import and export have not been validated.** A net match cannot independently prove CT calibration, direction-specific counters or the cause of an exception. The latest complete day may still change as SRP revises its intervals. The August 20-hour/5%-of-gross criteria are historical and superseded.
 
-## Why SRP “usage” and “production” are not used
+The November audit compared 324 eligible historical days. Replaying those same inputs with the reviewed numerical equality correction yields 287 within tolerance and 37 exceptions; six nominal 1 kWh boundaries change classification. The exceptions remain open. No meter scaling, calibration, interpolation or statistics rewriting is inferred from that result.
 
-With solar, batteries, and loads behind the same revenue meter, SRP derives separate usage/production channels that do not represent the physical source/load totals. A representative audited day had about 100.65 kWh actual solar and 203.75 kWh estimated whole-home load, while SRP labeled only 52.5 kWh production and 84.9 kWh usage. Its signed net still reconciled. The dashboard therefore treats only SRP net as authoritative.
+## SRP consumption and generation fields
+
+The imported signed net intervals support this comparison. Separate consumption/generation channels are not verified physical totals for either solar array, the home or independent received/delivered utility registers. Their meaning remains unverified for this wiring; a solar/battery installation's behind-the-meter generation cannot be recovered by renaming them. Native Energy totals and source scopes require their own checks.

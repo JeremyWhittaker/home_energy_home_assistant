@@ -681,3 +681,30 @@ test("failure reporting is persistent-only, bounded, and separate from device co
   assert.equal(helperSpecifications.find((h) => h.id === "home_energy_peak_import_threshold_kw").defaultState, 5);
   assert.equal(helperSpecifications.find((h) => h.id === "home_energy_planning_discharge_kw").defaultState, 7);
 });
+
+
+test("measurement copy preserves live units and separates current response from saved notes", () => {
+  const e = discoverHomeEnergy(fixture()).entities;
+  const dashboard = buildDashboard({entities:e});
+  const flow = dashboard.views[0].sections[0].cards.find((card) => card.type === "picture-elements");
+  const charge = flow.elements.find((element) => element.entity === e.batterySoc);
+  assert.equal(charge.suffix, " remaining");
+  assert.equal(charge.prefix, undefined);
+  assert.equal(charge.attribute, undefined, "native state label keeps the SOC percent unit");
+  const cards = dashboard.views.flatMap((v) => v.sections.flatMap((s) => s.cards));
+  const copy = cards.filter((card) => card.type === "markdown").map((card) => card.content).join("\n");
+  assert.match(copy, /Net energy only/);
+  assert.match(copy, /Separate SRP import and export have not been validated/);
+  assert.match(copy, /newest complete day may still be revised/i);
+  assert.match(copy, /larger absolute net reading/);
+  assert.match(copy, /household_short/);
+  assert.match(copy, /both forecasts|both estimates/);
+  assert.match(copy, /Four additional Home Assistant notices/);
+  assert.ok(cards.some((card) => card.heading === "HA report age"));
+  const controls = cards.find((card) => card.content?.includes("**Timing:**"));
+  assert.match(controls.content, /if is_state.*hvac_controller_active/);
+  assert.match(controls.content, /No risk adjustment is active for this peak/);
+  const audit = cards.find((card) => card.content?.includes("**Saved response note:**"));
+  assert.match(audit.content, /last_changed/);
+  assert.doesNotMatch(copy, /8\.105|at least 20 SRP|2% of net energy\./);
+});

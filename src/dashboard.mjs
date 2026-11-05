@@ -134,7 +134,7 @@ function liveFlow(e) {
       label(e.combinedSolarPower, 16.25, 13.5, { attribute: "eg4_pv_power_w", suffix: " W" }),
       label(e.combinedSolarPower, 83.75, 13.5, { attribute: "enphase_power_w", suffix: " W" }),
       label(e.batteryNetPower, 15, 40.5),
-      label(e.batterySoc, 15, 44.5, { prefix: "Charge " }),
+      label(e.batterySoc, 15, 44.5, { suffix: " remaining" }),
       label(e.gridNetPower, 15, 68.5),
       arrow(e.batteryNetPower, "right", 32.5, 38.2, 50, null, "#67d3a7"),
       arrow(e.batteryNetPower, "left", 32.5, 38.2, null, -50, "#67d3a7"),
@@ -150,9 +150,11 @@ function reconciliationNarrative(e) {
 {% if is_number(residual) %}
 **{{ states('${e.gridReconciliationDate}') }}:** EG4 minus SRP is **{{ (residual | float) | round(2) }} kWh**. {{ 'Within' if is_state('${e.gridReconciliationMatches}', 'on') else 'Outside' }} the configured **{{ state_attr('${e.gridReconciliationResidual}', 'tolerance_kwh') }} kWh** tolerance.
 
-Both meters must provide 24 distinct valid hours in Arizona time. The default allowance is the larger of 1 kWh or 2% of net energy. This is an engineering comparison; agreement does not independently prove CT calibration.
+**Net energy only.** Both sources need 24 distinct valid hours in Arizona time. The allowance is the larger of 1 kWh or 2% of the larger absolute net reading.
+
+Separate SRP import and export have not been validated. Gross-flow percentages are context, not separate directional agreement. The newest complete day may still be revised by SRP; a match does not establish CT calibration.
 {% else %}
-A complete settled comparison is unavailable. {{ state_attr('${e.gridReconciliationResidual}', 'refresh_error') or 'Waiting for a common day with 24 valid hours from each meter.' }}
+A complete net-energy comparison is unavailable. {{ state_attr('${e.gridReconciliationResidual}', 'refresh_error') or 'Waiting for a common day with 24 valid hours from each meter.' }}
 {% endif %}`;
 }
 
@@ -163,8 +165,10 @@ function batteryForecast(e) {
 ## 🪫 Battery is at its commissioned reserve
 State of charge is **{{ states('${e.batterySoc}') }}%**. The EG4 normally stops supplementing the home at this 20% floor.
 {% elif valid %}
-## 🔋 Conservative reserve forecast
-About **{{ states('${e.batteryAvailableEnergy}') }} kWh** remains above reserve. At the recent discharge pattern, the conservative forecast is **{{ states('${e.batteryMinutesToReserve}') }} minutes**, around **{{ as_timestamp(states('${e.batteryReserveEta}')) | timestamp_custom('%-I:%M %p') }}**.
+## 🔋 Reserve forecast
+About **{{ states('${e.batteryAvailableEnergy}') }} kWh** remains above reserve. Recent average use gives **{{ state_attr('${e.batteryMinutesToReserve}', 'central_minutes') | round(0) if state_attr('${e.batteryMinutesToReserve}', 'central_minutes') is number else 'unavailable' }} minutes**; the conservative planning case gives **{{ states('${e.batteryMinutesToReserve}') }} minutes**.
+
+A household shortfall warning needs both estimates to run out before peak ends. The conservative case still protects the cooling response.
 {% else %}
 ## ⏳ Building a reliable forecast
 The forecast needs at least five fresh discharge samples spanning eight minutes. It stays unavailable while the battery is charging or telemetry is stale.
@@ -174,6 +178,12 @@ The forecast needs at least five fresh discharge samples spanning eight minutes.
 function peakNarrative(e) {
   return `{% set peak = is_state('${e.peakWindow}', 'on') %}
 {% set schedule_ok = is_state('${e.peakScheduleValid}', 'on') %}
+{% set central = state_attr('${e.batteryMinutesToReserve}', 'central_minutes') %}
+{% set conservative = state_attr('${e.batteryMinutesToReserve}', 'conservative_minutes') %}
+{% set remaining = states('${e.peakMinutesRemaining}') %}
+{% set household_short = state_attr('${e.batteryMinutesToReserve}', 'forecast_valid') == true
+   and central is number and conservative is number and is_number(remaining)
+   and 0 <= central <= remaining | float and 0 <= conservative <= remaining | float %}
 {% if not schedule_ok %}
 ## ⚠️ Peak schedule needs attention
 The peak model fails safe when the editable SRP schedule is invalid.
@@ -183,12 +193,12 @@ Profile: **{{ states('${e.peakProfile}') }}**. Battery and grid are monitored co
 {% elif is_state('${e.livePeakImportRisk}', 'on') %}
 ## 🚨 On peak · material grid import
 Live import is **{{ (states('${e.gridImportPower}') | float / 1000) | round(1) }} kW**, above the **{{ states('${e.peakImportThreshold}') }} kW** alert threshold. Sustained import can raise billed demand.
-{% elif is_state('${e.peakForecastShortfall}', 'on') %}
+{% elif household_short %}
 ## ⚠️ On peak · battery shortfall forecast
-Battery reserve is forecast in **{{ states('${e.batteryMinutesToReserve}') }} minutes**, with **{{ states('${e.peakMinutesRemaining}') }} minutes** left in the peak window.
+Both forecasts reach reserve before peak ends: **{{ central | round(0) }} minutes** at recent average use and **{{ conservative | round(0) }} minutes** in the planning case, with **{{ remaining }} peak minutes** left.
 {% else %}
 ## 🛡️ {{ states('${e.peakStrategyStatus}') }}
-The battery forecast and EG4 whole-property grid CT are inside their current alert bounds.
+The grid and battery readings remain under observation. A conservative planning warning alone does not mean the battery will run out.
 {% endif %}`;
 }
 
@@ -207,7 +217,17 @@ function peakControlsNarrative(e) {
 
 **Timing:** every valid active SRP peak, including both winter windows. **Forecast guardrail:** {{ states('${e.hvacSocGuardrail}') }}% battery charge. **Cooling increase:** up to {{ states('${e.hvacSetpointIncrease}') }}°F.
 
-{{ states('${e.hvacControllerStatus}') if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] else 'No action recorded.' }}
+{% if is_state('${e.hvacControllerActive}', 'on') %}
+{{ states('${e.hvacControllerStatus}') if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] else 'Adjusting eligible cooling targets.' }}
+{% elif not is_state('${e.hvacResponseEnabled}', 'on') %}
+Automatic cooling response is off.
+{% elif not is_state('group.family_presence', 'home') %}
+Waiting until the family is home.
+{% elif is_state('${e.peakWindow}', 'on') and is_state('${e.peakScheduleValid}', 'on') %}
+No risk adjustment is active for this peak.
+{% else %}
+No SRP peak response is active.
+{% endif %}
 
 Only occupied-home cooling targets are eligible. This risk response does not change thermostat modes; the comfort schedule handles winter heating setbacks.`;
 }
@@ -224,7 +244,10 @@ function peakControlsSafety(_e) {
 }
 
 function peakControlsAudit(e) {
-  return `**Last action:** {{ states('${e.hvacControllerStatus}') }}
+  return `**Saved response note:** {{ states('${e.hvacControllerStatus}') if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] else 'No response recorded.' }}
+{% if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] %}
+Updated {{ as_timestamp(states['${e.hvacControllerStatus}'].last_changed) | timestamp_custom('%b %-d, %-I:%M %p') }}.
+{% endif %}
 
 **Last handled period:** {{ states('${e.hvacControllerEventKey}') }}
 
@@ -472,15 +495,15 @@ The two EG4 batteries provide roughly **28 kWh nominal** and feed the backup pan
               markdown(reconciliationNarrative(e)),
               {
                 type: "entities",
-                title: "Latest common settled day",
+                title: "Latest complete net comparison · may revise",
                 show_header_toggle: false,
                 state_color: true,
                 entities: [
-                  row(e.gridReconciliationDate, "Settlement date"),
-                  row(e.srpSettledNetEnergy, "SRP revenue-meter net"),
+                  row(e.gridReconciliationDate, "Comparison date"),
+                  row(e.srpSettledNetEnergy, "SRP net · delayed"),
                   row(e.eg4SameDayNetEnergy, "EG4 CT net"),
                   row(e.gridReconciliationResidual, "EG4 minus SRP residual"),
-                  row(e.gridReconciliationMatches, "Within configured tolerance"),
+                  row(e.gridReconciliationMatches, "Net within configured tolerance"),
                 ],
                 grid_options: { columns: "full", rows: 5 },
               },
@@ -500,7 +523,7 @@ The two EG4 batteries provide roughly **28 kWh nominal** and feed the backup pan
         badges: [
           badge(e.peakWindow, "Peak window", "mdi:clock-alert-outline"),
           badge(e.peakMinutesRemaining, "Peak remaining", "mdi:timer-sand"),
-          badge(e.peakForecastShortfall, "Battery forecast", "mdi:battery-clock-outline"),
+          badge(e.peakForecastShortfall, "Conservative guard", "mdi:battery-clock-outline"),
           badge(e.livePeakImportRisk, "Import risk", "mdi:transmission-tower-alert"),
         ],
         sections: [
@@ -562,7 +585,7 @@ A schedule readback confirms settings. Check the battery and grid graphs to veri
                 ],
                 grid_options: { columns: "full", rows: 6 },
               },
-              markdown(`Alerts go to the existing **Family notification** script and Home Assistant persistent notifications. They fire when the battery reaches 20%, when the conservative forecast reaches reserve before peak ends, and after material peak import persists for five minutes.`),
+              markdown(`Family alerts cover battery reserve, a shortfall in both forecasts, and five minutes of high peak import. Four additional Home Assistant notices flag missing peak battery support, unusable EG4 readings, scheduling faults, or a mismatched pre-peak profile. Those notices report a problem; they do not change equipment.`),
             ],
           },
         ],
@@ -668,7 +691,7 @@ A schedule readback confirms settings. Check the battery and grid graphs to veri
                   row(e.measurementModelValid, "Internal AC-bus consistency"),
                   row(e.telemetryHealthy, "Required telemetry healthy"),
                   row(e.sourceHealth, "Overall source health"),
-                  row(e.gridReconciliationMatches, "SRP / EG4 within tolerance"),
+                  row(e.gridReconciliationMatches, "SRP / EG4 net within tolerance"),
                   row(e.srpIntegrationAvailable, "SRP integration available"),
                   row(e.enphaseSystemProblem, "Enphase system problem"),
                   row(e.tigoModuleProblem, "Tigo module problem"),
@@ -696,6 +719,11 @@ A schedule readback confirms settings. Check the battery and grid graphs to veri
           {
             type: "grid",
             cards: [
+              heading("HA report age", "mdi:timer-outline"),
+              markdown(`{% set ages = state_attr('${e.sourceHealth}', 'source_ages_minutes') or {} %}
+{% for name in ages %}{% set age = ages[name] %}- **{{ name }}:** {{ (age | round(1)) ~ ' min' if age is number else 'unavailable' }}
+{% endfor %}
+These are Home Assistant report ages, not vendor-frame ages. Repeated reports can contain an older measurement.`),
               heading("Auditable measurement contract", "mdi:function-variant"),
               markdown(`### Live balance
 **Whole-home load** = EG4 AC + Enphase AC + signed grid − rectifier
@@ -718,7 +746,7 @@ Tigo is excluded because it observes the same EG4 panels.
 Positive means discharge; negative means charge.
 
 ### Daily utility check
-Require 24 distinct hourly intervals from each source. Sum SRP signed net and compare with EG4 import changes minus export changes. Report the net and gross residual percentages separately.`),
+Compare net energy only, using 24 distinct valid hourly intervals from each source. The allowance is the larger of 1 kWh or 2% of the larger absolute net reading. Separate utility import and export remain unvalidated; the newest complete day may still be revised.`),
               markdown(`## Equipment pages
 [EG4 solar & battery](/eg4-energy/live) · [Enphase array](/enphase-2103/overview) · [Tigo module map](/tigo-energy/overview) · [SRP billing detail](/srp-energy)`),
             ],

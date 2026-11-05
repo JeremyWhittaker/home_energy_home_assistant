@@ -396,7 +396,7 @@ async function main() {
   } finally {
     session?.close();
     await stopBrowser(browser);
-    rmSync(profileDir, { recursive: true, force: true });
+    rmSync(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
 
