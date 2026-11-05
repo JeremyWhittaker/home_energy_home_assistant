@@ -128,6 +128,6 @@ Turning control off alone leaves the applied schedule active; it is not rollback
 
 After a component update, preserve an exact private copy of the affected files,
 check HA configuration, restart through the supported Core service, and require
-the same config entry to return loaded with version 0.2.0 and the new switch and
+the same config entry to return loaded with version 0.2.1 and the new switch and
 sensors. Compare file hashes as well as fresh states before claiming deployment.
 Do not use a privileged installer when an owned in-place update is sufficient.

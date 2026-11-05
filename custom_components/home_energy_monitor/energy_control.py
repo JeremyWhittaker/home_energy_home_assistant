@@ -202,9 +202,10 @@ class Eg4CloudBackend:
             raise ControlError("Native weekly authority could not be read")
         weekly_values: dict[str, float | bool] = {}
         if weekly:
-            # Match the portal's selector read before its two complete blocks.
+            # The portal routes selector registers below 500 through remoteRead;
+            # only the weekly tables use remoteWeeklyOperation/readValues.
             selector = await self._request(
-                WEEKLY_ENDPOINT,
+                READ_ENDPOINT,
                 {
                     "inverterSn": self.serial,
                     "startRegister": 200,

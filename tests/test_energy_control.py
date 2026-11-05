@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from aiohttp import TCPConnector, web
+from aiohttp.resolver import ThreadedResolver
 
 from custom_components.home_energy_monitor.energy_control import (
     FUNCTION_ENDPOINT,
@@ -465,7 +467,8 @@ async def test_loaded_backend_rejects_unverified_or_noncloud_client(hass, client
 
 async def test_cloud_weekly_backup_uses_exact_portal_ranges_and_retains_clocks():
     async def response(_method, endpoint, *, data):
-        if endpoint == WEEKLY_ENDPOINT and data["startRegister"] != 200:
+        if endpoint == WEEKLY_ENDPOINT:
+            assert data["startRegister"] in (500, 612)
             return {"success": True, **weekly_values()}
         return {
             "success": True,
@@ -480,9 +483,84 @@ async def test_cloud_weekly_backup_uses_exact_portal_ranges_and_retains_clocks()
     assert [
         (x.args[1], x.kwargs["data"]["startRegister"], x.kwargs["data"]["pointNumber"])
         for x in calls
-    ] == [(WEEKLY_ENDPOINT, 200, 40), (WEEKLY_ENDPOINT, 500, 112), (WEEKLY_ENDPOINT, 612, 112)]
+    ] == [(READ_ENDPOINT, 200, 40), (WEEKLY_ENDPOINT, 500, 112), (WEEKLY_ENDPOINT, 612, 112)]
     assert snapshot["clock"]["HOLD_TIME"] == "2026-11-04 16:30:00"
     assert len(snapshot["weekly"]) == 392
+
+
+async def test_snapshot_routes_real_encoded_forms_to_the_correct_register_endpoint(
+    aiohttp_client, socket_enabled
+):
+    """Exercise HTTP encoding and reject the selector/table mix-up the mock hid."""
+    received = []
+
+    async def portal(request):
+        assert request.method == "POST"
+        assert request.content_type == "application/x-www-form-urlencoded"
+        form = dict(await request.post())
+        received.append((request.path, form))
+        assert form["inverterSn"] == "test-inverter"
+        if "autoRetry" in form:
+            # aiohttp encodes bool False as text "False"; the live API accepts it.
+            assert form["autoRetry"].lower() == "false"
+        start, count = int(form["startRegister"]), int(form["pointNumber"])
+        if request.path == WEEKLY_ENDPOINT:
+            if (start, count) not in ((500, 112), (612, 112)):
+                return web.json_response({"success": False, "msg": "PARAM_ERROR"})
+            prefixes = (
+                ("ubACChg", "ubForcedChg")
+                if start == 500
+                else ("ubForcedDischg", "ubGridPeakShav")
+            )
+            return web.json_response(
+                {
+                    "success": True,
+                    **{k: v for k, v in weekly_values().items() if k.startswith(prefixes)},
+                }
+            )
+        assert request.path == READ_ENDPOINT
+        assert (start, count) in ((0, 127), (127, 127), (240, 127), (233, 1), (200, 40))
+        data = {"success": True}
+        if start in (127, 233, 200):
+            data[WEEKLY] = True
+        if start == 0:
+            data["HOLD_TIME"] = "2026-11-04 16:30:00"
+        return web.json_response(data)
+
+    app = web.Application()
+    app.router.add_post(READ_ENDPOINT, portal)
+    app.router.add_post(WEEKLY_ENDPOINT, portal)
+    # A numeric loopback host needs no DNS. Avoid the optional c-ares resolver's
+    # background shutdown thread, keeping HA's strict resource cleanup intact.
+    http = await aiohttp_client(app, connector=TCPConnector(resolver=ThreadedResolver()))
+
+    class FormClient:
+        async def _request(self, method, endpoint, *, data):
+            async with http.request(method, endpoint, data=data) as response:
+                return await response.json()
+
+    backend = Eg4CloudBackend(FormClient(), "test-inverter")
+    snapshot = await backend.snapshot(weekly=True)
+
+    assert [
+        (path, int(form["startRegister"]), int(form["pointNumber"])) for path, form in received
+    ] == [
+        (READ_ENDPOINT, 0, 127),
+        (READ_ENDPOINT, 127, 127),
+        (READ_ENDPOINT, 240, 127),
+        (READ_ENDPOINT, 233, 1),
+        (READ_ENDPOINT, 200, 40),
+        (WEEKLY_ENDPOINT, 500, 112),
+        (WEEKLY_ENDPOINT, 612, 112),
+    ]
+    assert snapshot["globals"][WEEKLY] is True
+    assert snapshot["weekly"] == weekly_values()
+    assert snapshot["clock"]["HOLD_TIME"] == "2026-11-04 16:30:00"
+    with pytest.raises(ControlError, match="did not accept"):
+        await backend._request(
+            WEEKLY_ENDPOINT,
+            {"inverterSn": "test-inverter", "startRegister": 200, "pointNumber": 40},
+        )
 
 
 async def test_explicit_rollback_will_not_reactivate_a_changed_weekly_table(hass):
@@ -505,6 +583,7 @@ async def test_summer_weekends_keep_the_preserved_native_weekly_recipe(hass):
     assert result["profile"] == "summer-weekly"
     assert backend.parameters[WEEKLY] is True
     assert backend.weekly == control.baseline["weekly"]
-    assert backend.parameters["HOLD_AC_CHARGE_SOC_LIMIT"] == (
-        control.baseline["globals"]["HOLD_AC_CHARGE_SOC_LIMIT"]
+    assert (
+        backend.parameters["HOLD_AC_CHARGE_SOC_LIMIT"]
+        == (control.baseline["globals"]["HOLD_AC_CHARGE_SOC_LIMIT"])
     )
