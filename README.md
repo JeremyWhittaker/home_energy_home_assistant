@@ -61,18 +61,27 @@ Three alert automations notify the existing `script.notify_family` targets and c
 
 The forecast uses energy above reserve and the greater of recent p80 discharge or the 7 kW planning load. It fails unavailable when telemetry is stale or the sample window is too short.
 
-The **Peak Controls** tab contains the optional A/C demand-response policy. Its defaults are 6:00–8:00 PM, 25% SOC, a +2°F cooling-target increase, all three zones selected, and an 80°F per-zone ceiling. The master switch is deployed **off**; it was turned **on** on September 4, 2026. It can act once per configured window when either:
+The **Peak Controls** tab follows every valid SRP peak, including both winter windows. Its optional battery-risk cooling response acts only while the family is home. Defaults are a 25% battery guardrail, a 2°F increase, all three zones selected and an 80°F ceiling. It can respond once per actual morning/evening period when battery reserve is threatened or grid import stays high for five minutes.
 
-- the battery forecast says the bank will reach reserve before peak ends and SOC is at or below the guardrail; or
-- EG4's whole-property CT remains above the configured import threshold for five minutes.
+The response preserves HVAC modes and snapshots each target before changing it. Manual changes release ownership. At peak end, departure, disabled control or invalid/stale rules, it conditionally restores still-owned targets before reporting inactive. The separate mode-aware household comfort/away scheduler can then take over without racing restoration; old 6–8 PM helpers remain only for existing references.
 
-The guardrail is a brake, not a trigger, and on a fast-discharging night it can become the binding constraint — see *How the SOC guardrail interacts with discharge rate* in `docs/PEAK_STRATEGY.md`.
+## Automatic inverter scheduling
 
-It never changes HVAC mode or turns equipment off. Each original target is saved before adjustment. A person or another automation changing a target to a different value releases that zone immediately; only a still-owned target that exactly matches the applied value can be restored. The controller releases just before its configured end, then yields to the existing 6 PM, 8 PM, and 9 PM routines.
+Version 0.2 adds a separate **Automatic EG4 schedule** switch. It starts off, persists its choice and uses the existing loaded EG4 cloud client; it stores no additional login. The shared SRP calculator must be enabled, recent, consistent with the E-15 calendar and configured for America/Phoenix. Inverter clocks must agree within two minutes.
+
+| Calendar | Inverter behavior |
+|---|---|
+| Winter weekday | Peak shaving 05–09 and 17–21 at 0 kW grid limit; grid charge 21–05 and 15–17 at 2 kW; PV priority 09–15 at 12 kW |
+| Summer ordinary weekday/weekend | Restore and preserve the complete verified native weekly summer table, including distinct 2/4 kW weekday and 4 kW weekend charging |
+| Winter weekend; SRP holiday in either season | Explicit daily off-peak preservation with 4 kW charging,09–15 PV priority and peak shaving off |
+
+The uploaded winter 101% charging-stop value is preserved as a device workaround, not physical battery capacity. Reserve, protection, forced export and backup settings are preserved. A complete numeric backup and undo journal are saved locally before changes. The controller programs and reads back daily fields before switching from native weekly authority, then verifies again without using cached acknowledgements. Failures trigger bounded rollback or stop automatic changes with a visible recovery error.
+
+The dashboard shows current tariff, profile, last verified time and any error. Turning the master off stops further changes but leaves applied settings in the inverter. [Operations](docs/OPERATIONS.md#inverter-schedule-control) describes dry-run and recovery services. Source tests, deployed configuration and observed power flow are separate acceptance steps.
 
 ## Install and deploy
 
-The Home Assistant custom-component directory is root-owned on this appliance. Export an administrator API token, then run the audited privileged installer once from this repository. It stages a recoverable copy, runs Home Assistant's configuration check, waits for authenticated post-restart health, requires any pre-existing Home Energy config entry to return to `loaded`, and restores the prior component automatically if validation or health fails:
+Check actual ownership before installation. The existing component directory on the November 4 appliance is user-writable, while its parent is protected; an owned in-place update needs an exact private backup, configuration check and controlled restart. On a root-owned installation, export an administrator API token, then run the audited privileged installer once from this repository. It stages a recoverable copy, runs Home Assistant's configuration check, waits for authenticated post-restart health, requires any pre-existing Home Energy config entry to return to `loaded`, and restores the prior component automatically if validation or health fails:
 
 ```bash
 export HA_BASE_URL='http://homeassistant.local:8123'
@@ -103,4 +112,4 @@ See [Topology](docs/TOPOLOGY.md), [Measurement model](docs/MEASUREMENT_MODEL.md)
 
 The utility comparison now requires 24 distinct valid hourly intervals and reports separate net-energy and gross-flow tolerances. The net comparison uses the larger of 1 kWh or 2% of the larger absolute net reading; a broad gross-flow tolerance no longer hides a material net discrepancy. Missing or failed comparison data clears the cached result.
 
-Tigo-to-EG4 comparisons now expire with their source samples and expose alignment/freshness details. Local Enphase remains preferred; a separately identified cloud power fallback is disabled by default until its whole-array scope is verified, and cumulative energy sources are never spliced. The seasonal calendar model validates the existing shared SRP helpers and proposes the uploaded winter profile; this checkpoint alone does not enable inverter control.
+Tigo-to-EG4 comparisons now expire with their source samples and expose alignment/freshness details. Local Enphase remains preferred; a separately identified cloud power fallback is disabled by default until its whole-array scope is verified, and cumulative energy sources are never spliced. The seasonal controller validates the existing shared SRP helpers and uploaded winter profile. Installation leaves new automatic inverter control off until explicitly enabled and verified.

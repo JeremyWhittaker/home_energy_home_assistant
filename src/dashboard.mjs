@@ -248,6 +248,7 @@ export function buildDashboard(discovery) {
     ...discovery.entities,
     inverterScheduleStatus: "sensor.home_energy_inverter_schedule_status",
     srpPeriod: "sensor.home_energy_srp_period",
+    automaticInverterSchedule: "switch.home_energy_automatic_inverter_schedule",
   };
   return {
     views: [
@@ -510,6 +511,12 @@ The two EG4 batteries provide roughly **28 kWh nominal** and feed the backup pan
               markdown(peakNarrative(e)),
               tile(e.srpPeriod, "Current SRP period", "mdi:calendar-clock", 12),
               tile(e.inverterScheduleStatus, "EG4 schedule readback", "mdi:calendar-check", 12),
+              {
+                type: "entities", title: "Battery schedule", show_header_toggle: false,
+                entities: [{ entity: e.automaticInverterSchedule, name: "Automatic EG4 schedule" }],
+                grid_options: { columns: "full" },
+              },
+              markdown("Automatic scheduling follows SRP seasons, weekends and holidays. Turning it off stops further changes and leaves the inverter's last applied schedule in place."),
               markdown(`{% set verified = state_attr('${e.inverterScheduleStatus}', 'last_verified') %}
 **Schedule profile:** {{ state_attr('${e.inverterScheduleStatus}', 'profile') or 'Not verified' }}. **Last verified:** {{ as_timestamp(verified) | timestamp_custom('%b %-d, %-I:%M %p') if verified else 'Not yet verified' }}.
 

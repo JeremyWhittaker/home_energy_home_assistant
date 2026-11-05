@@ -52,6 +52,7 @@ function fixture() {
   states.push(
     { entity_id: "sensor.home_energy_inverter_schedule_status", state: "disabled", attributes: {} },
     { entity_id: "sensor.home_energy_srp_period", state: "off_peak", attributes: {} },
+    { entity_id: "switch.home_energy_automatic_inverter_schedule", state: "off", attributes: {} },
     { entity_id: "group.family_presence", state: "home", attributes: {} },
   );
   return { entities: registry, states };

@@ -20,13 +20,13 @@ Configure demand response on **Home Energy → Peak Controls** (`/home-energy/pe
 Use this order when commissioning or changing the rule:
 
 1. Leave **Enable automatic A/C response** off.
-2. Set the alert/response window. The summer default is 6:00–8:00 PM; the SRP schedule must also report an active valid peak.
+2. Verify the shared SRP calendar and its calculator freshness. Both winter peaks and the summer peak apply; the old 6–8 PM helpers no longer limit timing.
 3. Set the SOC guardrail and common cooling-target increase.
 4. Select participating zones and set each zone's maximum comfort temperature.
 5. Review live battery ETA, EG4 grid import, thermostat targets, and the read-only controller audit.
 6. Turn on the master only when those values are correct.
 
-Turning the master off is the normal emergency stop. If the controller is active, this cancels the response immediately, retains ownership for a ten-second settling period so any already-issued thermostat call or external override can be observed, then marks the controller inactive and performs conditional restoration. A thermostat is restored only when restoration is on and its current target still equals the value Peak Controls applied. A manual or scheduled change to a different target is preserved. The periodic release normally starts in the final 60 seconds of the configured window so exact-end routines take authority afterward.
+Turning the master off is the normal emergency stop. If the controller is active, this cancels the response immediately, retains ownership for a ten-second settling period so any already-issued thermostat call or external override can be observed, then performs conditional restoration and clears ownership before reporting inactive. A thermostat is restored only when restoration is on and its current target still equals the value Peak Controls applied. A manual or scheduled change to a different target is preserved. The periodic release normally starts in the final 60 seconds of the actual SRP peak so exact-end routines take authority afterward.
 
 Do not edit the `home_energy_hvac_controller_*`, `home_energy_hvac_*_owned`, previous-target, or applied-target helpers from Developer Tools. They are internal ownership records. Their read-only values are summarized on the dashboard.
 
@@ -95,3 +95,39 @@ If the master is off and the controller audit still says active for more than on
 - Do not commit `.env`, dashboard backups, screenshots, runtime databases, or credentials.
 - Dashboard backups intentionally include the Home Assistant base URL but never the token.
 - Component backups live under `/config/.home_energy_monitor_deployments` on the HA appliance; review and remove old timestamped copies manually only after a stable operating period.
+
+## Inverter schedule control
+
+The inverter master is separate from the A/C response master. Initial setup
+leaves `switch.home_energy_automatic_inverter_schedule` off. A controller tick
+evaluates the calendar each minute; unchanged profiles receive uncached
+verification every 15 minutes, with five-minute error backoff. No repeated writes
+are sent when actual settings already match.
+
+Before commissioning, call `home_energy_monitor.apply_inverter_schedule` with
+`dry_run: true` and review the returned desired profile, changed fields and
+authority change. The dry run may preserve the numeric baseline in HA's local
+Store; it does not change the inverter. Then enable the switch and verify
+`sensor.home_energy_inverter_schedule_status`, `sensor.home_energy_srp_period`,
+actual readback, and grid/battery power.
+
+Winter daily targets use the preserved screenshot recipe. Ordinary summer
+weekdays and weekends restore the unchanged native weekly summer table;
+holidays use explicit off-peak behavior. Native weekly data is backed up via
+selector read 200/40 and weekly reads 500/112 and 612/112. Preserve the literal 101
+charging workaround. Never substitute forced discharge/export or modify
+reserve/protection to obtain a desired flow.
+
+A transaction journal records intent before each write and verifies current
+parameters without a cloud cache key. Partial changes trigger bounded rollback.
+Interrupted apply/restore or failed recovery disables the master and reports
+**Recovery required**. `home_energy_monitor.rollback_inverter_schedule` restores
+the last actual change only after checking the original inverter identity and
+weekly-table integrity. Routine no-change verification retains that undo record.
+Turning control off alone leaves the applied schedule active; it is not rollback.
+
+After a component update, preserve an exact private copy of the affected files,
+check HA configuration, restart through the supported Core service, and require
+the same config entry to return loaded with version 0.2.0 and the new switch and
+sensors. Compare file hashes as well as fresh states before claiming deployment.
+Do not use a privileged installer when an owned in-place update is sufficient.

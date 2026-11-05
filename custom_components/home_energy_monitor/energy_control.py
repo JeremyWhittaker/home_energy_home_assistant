@@ -599,7 +599,7 @@ class EnergyControlManager:
                 return self.state()
             if self.backoff_until and now < self.backoff_until and not dry_run:
                 return self.state()
-            ordinary_summer = tariff.season == "summer" and tariff.day_kind == "weekday"
+            ordinary_summer = tariff.season == "summer" and tariff.day_kind != "holiday"
             key = f"{tariff.season}-{'weekly' if ordinary_summer else tariff.day_kind}"
             if (
                 not dry_run

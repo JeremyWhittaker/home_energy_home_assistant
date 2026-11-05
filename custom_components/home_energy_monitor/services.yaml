@@ -1,0 +1,21 @@
+set_inverter_schedule_enabled:
+  name: Set automatic inverter schedule
+  description: Enable seasonal EG4 control or stop automatic changes. Disabling leaves the last applied inverter settings in place.
+  fields:
+    enabled:
+      name: Enabled
+      required: true
+      selector:
+        boolean:
+apply_inverter_schedule:
+  name: Check or apply inverter schedule
+  description: Check the current SRP calendar and EG4 settings. Actual changes require automatic control to be enabled.
+  fields:
+    dry_run:
+      name: Check without changing settings
+      default: false
+      selector:
+        boolean:
+rollback_inverter_schedule:
+  name: Restore prior inverter schedule
+  description: Disable automatic control and restore the last actual change from its private backup. The original inverter and weekly schedule must still match.

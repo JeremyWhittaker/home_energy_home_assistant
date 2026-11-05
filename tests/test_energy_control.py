@@ -495,3 +495,16 @@ async def test_explicit_rollback_will_not_reactivate_a_changed_weekly_table(hass
     assert backend.parameters == before
     assert backend.parameters[WEEKLY] is False
     assert control.recovery_required
+
+
+async def test_summer_weekends_keep_the_preserved_native_weekly_recipe(hass):
+    control, backend, _, clock = await manager(hass)
+    await control.async_set_enabled(True)
+    fresh_helper(hass, clock, "2027-05-08T10:00:00-07:00")
+    result = await control.async_apply()
+    assert result["profile"] == "summer-weekly"
+    assert backend.parameters[WEEKLY] is True
+    assert backend.weekly == control.baseline["weekly"]
+    assert backend.parameters["HOLD_AC_CHARGE_SOC_LIMIT"] == (
+        control.baseline["globals"]["HOLD_AC_CHARGE_SOC_LIMIT"]
+    )

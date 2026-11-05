@@ -7,7 +7,7 @@ from datetime import timedelta
 from homeassistant.const import Platform
 
 DOMAIN = "home_energy_monitor"
-PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR)
+PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH)
 
 CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 CONF_BATTERY_RESERVE_PERCENT = "battery_reserve_percent"
