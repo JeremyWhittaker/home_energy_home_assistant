@@ -378,6 +378,7 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
             ),
             "reconciliation_error": s.reconciliation_error,
             "tigo_comparison_reason": s.tigo_alignment_reason,
+            "source_age_basis": "HA report age; not vendor-frame age",
             "source_ages_minutes": {
                 key: round(value, 1) if value is not None else None
                 for key, value in s.source_ages_minutes.items()

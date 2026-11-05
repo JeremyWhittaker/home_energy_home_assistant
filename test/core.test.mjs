@@ -229,6 +229,10 @@ test("alert and HVAC automations are windowed, one-shot, and mode safe", () => {
     "home_energy_battery_reserve_alert",
     "home_energy_peak_battery_forecast_alert",
     "home_energy_live_peak_import_alert",
+    "home_energy_dispatch_failure_alert",
+    "home_energy_eg4_unusable_alert",
+    "home_energy_controller_fault_alert",
+    "home_energy_profile_mismatch_alert",
     "home_energy_peak_hvac_response",
     "home_energy_peak_hvac_override_guard",
     "home_energy_peak_hvac_release",
@@ -440,11 +444,11 @@ class HelperSocket {
 
 test("helper deployment is idempotent", async () => {
   const latches = helperSpecifications.filter((helper) => helper.domain === "input_text");
-  assert.equal(latches.length, 5);
+  assert.equal(latches.length, 9);
   assert.equal(helperSpecifications.some((helper) => "initial" in helper.config), false);
   const socket = new HelperSocket();
   const first = await applyHelpers(socket, helperSpecifications);
-  assert.equal(first.changes.length, 31);
+  assert.equal(first.changes.length, 35);
   const second = await applyHelpers(socket, helperSpecifications);
   assert.equal(second.changes.length, 0);
   const masterCreate = socket.calls.find((call) => call.type === "input_boolean/create"
@@ -648,4 +652,32 @@ test("installer keeps deployment artifacts outside custom_components", () => {
     assert.match(installer, /\/config\/\.home_energy_monitor_deployments/);
     assert.doesNotMatch(installer, /\/config\/custom_components\/\.home_energy_monitor/);
   }
+});
+
+
+test("failure reporting is persistent-only, bounded, and separate from device controls", () => {
+  const e = discoverHomeEnergy(fixture()).entities;
+  const alerts = buildAutomations(e).filter((a) => [
+    "home_energy_dispatch_failure_alert", "home_energy_eg4_unusable_alert",
+    "home_energy_controller_fault_alert", "home_energy_profile_mismatch_alert",
+  ].includes(a.id));
+  assert.equal(alerts.length, 4);
+  for (const { config } of alerts) {
+    assert.equal(config.mode, "single");
+    assert.deepEqual(config.actions.map((action) => action.action), [
+      "persistent_notification.create", "input_text.set_value",
+    ]);
+    assert.match(stableString(config.conditions), /alert_key/);
+    const latch = config.actions[1].target.entity_id;
+    assert.ok(helperSpecifications.some((h) => `${h.domain}.${h.id}` === latch));
+  }
+  for (const { config } of alerts.slice(0, 2)) assert.equal(config.triggers[0].for, "00:10:00");
+  assert.match(alerts[0].config.triggers[0].value_template, /> 500/);
+  assert.match(stableString(alerts[2]), /Automatic retries stopped/);
+  assert.match(stableString(alerts[2]), /00:30:00/);
+  assert.deepEqual(alerts[3].config.triggers.map((t) => t.at), ["04:30:00", "16:30:00"]);
+  assert.match(alerts[3].config.variables.expected_profile, /day_kind/);
+  assert.doesNotMatch(stableString(alerts), /script.notify_family|climate.set_temperature|switch.turn/);
+  assert.equal(helperSpecifications.find((h) => h.id === "home_energy_peak_import_threshold_kw").defaultState, 5);
+  assert.equal(helperSpecifications.find((h) => h.id === "home_energy_planning_discharge_kw").defaultState, 7);
 });

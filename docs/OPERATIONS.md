@@ -209,3 +209,69 @@ PV priority09–15 at12 kW and peak shaving off. Its single pure-policy definiti
 is admitted before transport. The 101% stop value is still a device workaround.
 Midnight endpoint, weekend, holiday and switch-back behavior still require
 natural field observations; passing source tests does not establish them.
+
+
+## Peak failure diagnostics
+
+Four additional automations create **persistent Home Assistant notifications
+only**. They do not send a new phone message, retry device commands or change
+charging, thermostat or inverter settings. Existing reserve, household forecast
+and 5 kW import family alerts retain their IDs and recipients.
+
+- **Missing peak battery support:** valid recent shared SRP rules and usable EG4
+  battery/SOC/grid readings, SOC above 25%, reported house load minus solar above
+  1 kW, import above a separate 500 W threshold and battery discharge no greater
+  than 300 W must persist together for ten minutes. This catches the reported
+  morning failure pattern below the existing 5 kW demand/HVAC threshold. It does
+  not establish which schedule, hardware or data source caused it.
+- **Unusable peak EG4 readings:** battery power, SOC or service-grid values/units
+  or their HA report-age qualification fail for ten minutes during valid peak.
+  A missing Enphase-dependent house-load estimate alone does not trigger it.
+- **Scheduling fault:** Recovery required and Automatic retries stopped report
+  immediately when observed; Blocked must last 30 minutes. A five-minute
+  reconciliation catches a fault already active when the automation loads.
+- **Profile mismatch:** at 04:30 and 16:30 compare the last verified profile with
+  the controller's current season/day-kind attributes. Holidays are not
+  recalculated in another calendar. This is not a fresh inverter readback.
+
+The first two and the profile check use separate saved date/AM-or-PM keys,
+limiting each diagnostic to one per actual peak/window. Controller faults use
+status plus its HA state-change time as an incident key; changing attributes
+without changing status does not repeatedly report the same incident. Each
+class reuses its persistent notification ID, so later incidents replace that
+class's existing notification rather than building an unbounded list.
+
+The ten-minute template trigger requires continuous qualification. Home
+Assistant restart or automation reload resets that timer; it does not claim
+unobserved continuity across downtime. A new sustained condition can report
+later if that window has not already been latched. Recovery faults reconcile
+without waiting for a new state transition. These notifications do not prove a
+physical action or utility outage; consult the controller diagnostics, retained
+settings and independently timed vendor/mains evidence.
+
+### Household forecast versus conservative protection
+
+The central estimate divides available energy by recent mean discharge. The
+conservative estimate uses 95% of that energy and the greater of p80 discharge
+or the existing 7 kW planning value. The conservative shortfall binary and HVAC
+risk guard remain unchanged. A household shortfall message and the headline
+shortfall status now require a valid sample window with **both** estimates at
+or before peak end. The 86%/2.4 kW morning and 82%/3.4 kW evening observations do
+not warn solely because 7 kW is conservative; a true central-plus-conservative
+shortfall still warns. Reserve and import protection are unchanged.
+
+### HA report ages and numerical comparison equality
+
+The source-health attribute `source_ages_minutes` retains its ID for existing
+consumers. Its `source_age_basis` identifies **HA report age; not vendor-frame
+age**. Unavailable, unknown, nonfinite, unsupported-unit and out-of-range SOC
+values have no age. Valid zero power still has a report age. A republished frozen
+vendor frame can still look recent in HA; commissioning must separately check
+its vendor origin timestamp.
+
+Settled net-energy comparison allows 1e-9 kWh of binary-arithmetic residue beyond
+its displayed boundary. This corrects six audited nominal 1 kWh equality cases;
+a genuine 1.1 kWh difference and even 1.00000001 kWh remain outside a 1 kWh
+allowance. The physical greater of 1 kWh or 2%-of-larger-absolute-net tolerance is
+unchanged. This correction does not calibrate either meter or prove separate
+utility import/export directions.

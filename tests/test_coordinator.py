@@ -323,3 +323,50 @@ def test_tigo_provenance_includes_both_measurement_times():
     assert attrs["tigo_sample_at"] != attrs["eg4_sample_at"]
     assert attrs["alignment_skew_seconds"] == 30
     assert attrs["ratio_available"] is True
+
+
+@pytest.mark.parametrize(
+    ("value", "unit"),
+    [
+        ("unavailable", "W"),
+        ("unknown", "W"),
+        ("nan", "W"),
+        ("inf", "W"),
+        ("100", "kWh"),
+    ],
+)
+async def test_invalid_power_has_no_ha_report_age_even_when_republished(model, value, unit):
+    coordinator, reports = model
+    now = datetime.now(UTC)
+    reports["sensor.eg4_battery"] = state(
+        "sensor.eg4_battery", value, unit=unit, sampled_at=now
+    )
+    assert coordinator._age_minutes("sensor.eg4_battery", now) is None
+
+
+@pytest.mark.parametrize("soc", ["unavailable", "nan", -1, 101])
+async def test_invalid_soc_has_no_ha_report_age(model, soc):
+    coordinator, reports = model
+    now = datetime.now(UTC)
+    reports["sensor.eg4_soc"] = state("sensor.eg4_soc", soc, unit="%", sampled_at=now)
+    assert coordinator._age_minutes("sensor.eg4_soc", now) is None
+
+
+async def test_valid_zero_retains_report_age_and_future_report_is_not_fresh(model):
+    coordinator, reports = model
+    now = datetime.now(UTC)
+    reports["sensor.eg4_grid"] = state(
+        "sensor.eg4_grid", 0, sampled_at=now - timedelta(minutes=2)
+    )
+    assert coordinator._age_minutes("sensor.eg4_grid", now) == 2
+    reports["sensor.eg4_grid"] = state(
+        "sensor.eg4_grid", 0, sampled_at=now + timedelta(minutes=2)
+    )
+    assert coordinator._age_minutes("sensor.eg4_grid", now) is None
+
+
+async def test_soc_with_wrong_units_has_no_report_age(model):
+    coordinator, reports = model
+    now = datetime.now(UTC)
+    reports["sensor.eg4_soc"] = state("sensor.eg4_soc", 80, unit="W", sampled_at=now)
+    assert coordinator._age_minutes("sensor.eg4_soc", now) is None

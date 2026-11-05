@@ -253,7 +253,14 @@ def calculate_live(
         peak_status = "On peak — importing after battery reserve"
     elif import_risk:
         peak_status = "On peak — sustained import can raise billed demand"
-    elif shortfall:
+    elif (
+        shortfall
+        and forecast_valid
+        and inputs.battery_source_fresh
+        and minutes_to_reserve is not None
+        and inputs.peak_minutes_remaining is not None
+        and minutes_to_reserve <= inputs.peak_minutes_remaining
+    ):
         peak_status = "On peak — battery may reach reserve before peak ends"
     elif battery_net is not None and battery_net > 300.0:
         peak_status = "On peak — battery is supplementing the home"
@@ -435,7 +442,7 @@ def calculate_reconciliation(
             eg4_net_kwh=eg4_net,
             residual_kwh=residual,
             tolerance_kwh=tolerance,
-            matches=abs(residual) <= tolerance,
+            matches=abs(residual) <= tolerance + 1e-9,
             srp_hour_count=len(hourly),
             eg4_hour_count=24 if hourly_eg4 else None,
             srp_duplicate_count=srp_duplicates.get(day, 0),

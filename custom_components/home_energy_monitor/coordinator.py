@@ -283,9 +283,23 @@ class HomeEnergyCoordinator(DataUpdateCoordinator[HomeEnergySnapshot]):
 
     def _age_minutes(self, entity_id: str | None, now: datetime) -> float | None:
         state = self._state(entity_id)
-        if state is None:
+        if not _is_valid_state(state) or _to_number(state) is None:
             return None
-        return max(0.0, (now - _state_time(state)).total_seconds() / 60.0)
+        # This is HA report age, not a vendor measurement acquisition time.
+        if entity_id == self.sources.eg4_battery_soc:
+            value = _to_number(state)
+            if (
+                value is None
+                or not 0 <= value <= 100
+                or str(state.attributes.get("unit_of_measurement", "")).strip() != "%"
+            ):
+                return None
+        elif _power_w(state) is None:
+            return None
+        elapsed = now - _state_time(state)
+        if elapsed < -MAXIMUM_FUTURE_SKEW:
+            return None
+        return max(0.0, elapsed.total_seconds() / 60.0)
 
     def _fresh(self, entity_id: str | None, now: datetime, maximum: timedelta) -> bool:
         state = self._state(entity_id)

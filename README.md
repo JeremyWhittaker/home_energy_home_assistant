@@ -56,10 +56,12 @@ The dashboard does **not** claim separate backup-panel and regular-panel loads. 
 Three alert automations notify the existing `script.notify_family` targets and create a persistent Home Assistant notification:
 
 1. Battery reaches the commissioned reserve, including the exact 20% floor. It also alerts if a peak window begins while the battery is already at reserve.
-2. During the editable Peak Controls window, a conservative 15-minute discharge forecast predicts reserve before the active SRP peak window ends.
+2. During an SRP peak, valid central and conservative 15-minute forecasts both predict reserve before peak ends. The central estimate uses recent average discharge; a planning-floor-only shortfall does not warn the household.
 3. During that window, whole-property grid import remains above the editable threshold—5 kW by default—for five minutes during peak.
 
-The forecast uses energy above reserve and the greater of recent p80 discharge or the 7 kW planning load. It fails unavailable when telemetry is stale or the sample window is too short.
+The conservative forecast uses energy above reserve and the greater of recent p80 discharge or the existing 7 kW planning load. It continues to govern the separate HVAC risk response; the household warning and status require the central forecast to agree. Forecasts fail unavailable when telemetry is stale or the sample window is too short.
+
+Four additional automations create persistent Home Assistant diagnostics without adding push recipients or controlling equipment: ten minutes of missing peak battery support despite reported import above 0.5 kW and a load deficit; ten minutes of unusable EG4 battery/SOC/grid values during peak; immediate recovery-required/retry-stop or 30 minutes Blocked; and a saved-profile mismatch at 04:30 or 16:30. Peak diagnostics are limited to one per window, and controller faults to one per continuous status incident. The separate existing 5 kW import threshold and 7 kW planning helper remain unchanged. See [Operations](docs/OPERATIONS.md#peak-failure-diagnostics) for qualification and restart limits.
 
 The **Peak Controls** tab follows every valid SRP peak, including both winter windows. Its optional battery-risk cooling response acts only while the family is home. Defaults are a 25% battery guardrail, a 2°F increase, all three zones selected and an 80°F ceiling. It can respond once per actual morning/evening period when battery reserve is threatened or grid import stays high for five minutes.
 
@@ -113,5 +115,7 @@ See [Topology](docs/TOPOLOGY.md), [Measurement model](docs/MEASUREMENT_MODEL.md)
 ## November 4 measurement corrections
 
 The utility comparison now requires 24 distinct valid hourly intervals and reports separate net-energy and gross-flow tolerances. The net comparison uses the larger of 1 kWh or 2% of the larger absolute net reading; a broad gross-flow tolerance no longer hides a material net discrepancy. Missing or failed comparison data clears the cached result.
+
+Source ages are labelled **HA report age**, with no age supplied for unusable or incorrectly unit-labelled values. A recent report does not prove a recent vendor frame. Net comparison equality includes only a 1e-9 kWh allowance for binary arithmetic, without changing the 1 kWh/2% physical tolerance.
 
 Tigo-to-EG4 comparisons now expire with their source samples and expose alignment/freshness details. Local Enphase remains preferred; a separately identified cloud power fallback is disabled by default until its whole-array scope is verified, and cumulative energy sources are never spliced. The seasonal controller validates the existing shared SRP helpers and uploaded winter profile. Installation leaves new automatic inverter control off until explicitly enabled and verified.

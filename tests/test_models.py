@@ -400,3 +400,83 @@ def test_an_independent_eg4_load_reading_survives_enphase_loss() -> None:
     )
     assert result.eg4_metered_load_w == 3913
     assert result.whole_home_load_w is None
+
+
+@pytest.mark.parametrize(("soc", "discharge", "remaining"), [(86, 2400, 208), (82, 3400, 168)])
+def test_observed_winter_peaks_keep_conservative_guard_without_household_false_alarm(
+    soc, discharge, remaining
+):
+    result = calculate_live(
+        inputs(
+            battery_soc_percent=soc,
+            battery_raw_w=-discharge,
+            average_battery_discharge_w=discharge,
+            p80_battery_discharge_w=discharge,
+            battery_sample_count=12,
+            battery_sample_span_minutes=14,
+            on_peak=True,
+            peak_minutes_remaining=remaining,
+            grid_net_w=0,
+        ),
+        options(),
+    )
+    assert result.battery_forecast_valid and result.peak_forecast_shortfall
+    assert result.battery_risk_minutes_to_reserve < remaining
+    assert result.battery_minutes_to_reserve > remaining
+    assert "may reach reserve" not in result.peak_strategy_status
+    assert result.peak_strategy_status == "On peak — battery is supplementing the home"
+
+
+def test_genuine_central_and_conservative_shortfall_still_warns_household():
+    result = calculate_live(
+        inputs(
+            battery_soc_percent=30,
+            battery_raw_w=-4000,
+            average_battery_discharge_w=4000,
+            p80_battery_discharge_w=4500,
+            battery_sample_count=12,
+            battery_sample_span_minutes=14,
+            on_peak=True,
+            peak_minutes_remaining=90,
+            grid_net_w=0,
+        ),
+        options(),
+    )
+    assert result.peak_forecast_shortfall
+    assert result.battery_minutes_to_reserve < 90
+    assert result.battery_risk_minutes_to_reserve < 90
+    assert result.peak_strategy_status == "On peak — battery may reach reserve before peak ends"
+
+
+@pytest.mark.parametrize(
+    "residual",
+    [
+        1.0000000000003624,
+        1.000000000002732,
+        1.0000000000014566,
+        1.0000000000021814,
+        1.0000000000050928,
+        -1.0000000000003668,
+    ],
+)
+def test_six_observed_binary_residues_do_not_expand_the_physical_tolerance(residual):
+    # Exact selected residuals from six audited days; no private account history.
+    result = calculate_reconciliation(
+        srp_hourly=_hours(27, state=0),
+        eg4_import_daily=[_row(27, change=max(residual, 0))],
+        eg4_export_daily=[_row(27, change=max(-residual, 0))],
+        today=date(2026, 8, 30),
+    )
+    assert result is not None and result.matches
+    assert result.residual_kwh == residual and result.tolerance_kwh == 1
+
+
+@pytest.mark.parametrize("residual", [1.1, -1.1, 1.00000001, -1.00000001])
+def test_real_outside_tolerance_stays_outside_after_numeric_equality_fix(residual):
+    result = calculate_reconciliation(
+        srp_hourly=_hours(27, state=0),
+        eg4_import_daily=[_row(27, change=max(residual, 0))],
+        eg4_export_daily=[_row(27, change=max(-residual, 0))],
+        today=date(2026, 8, 30),
+    )
+    assert result is not None and not result.matches and result.tolerance_kwh == 1

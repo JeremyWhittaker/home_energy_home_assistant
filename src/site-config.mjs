@@ -92,6 +92,14 @@ export const helperSpecifications = Object.freeze([
       mode: "text",
     },
   },
+  ...["dispatch_failure", "eg4_unusable", "controller_fault", "profile_mismatch"].map((kind) => ({
+    domain: "input_text",
+    id: `home_energy_${kind}_alert_key`,
+    config: {
+      name: `Home Energy ${kind.replaceAll("_", " ")} Alert Key`,
+      icon: "mdi:message-badge-outline", min: 0, max: 128, mode: "text",
+    },
+  })),
   {
     domain: "input_boolean",
     id: "home_energy_hvac_response_enabled",
@@ -623,6 +631,131 @@ function peakHvacActivationSequence(e, zones) {
   ];
 }
 
+export function householdShortfallTemplate(e) {
+  return `{% set central = state_attr('${e.batteryMinutesToReserve}', 'central_minutes') %}
+{% set conservative = state_attr('${e.batteryMinutesToReserve}', 'conservative_minutes') %}
+{% set remaining = states('${e.peakMinutesRemaining}') %}
+{{ state_attr('${e.batteryMinutesToReserve}', 'forecast_valid') == true
+   and central is number and conservative is number and is_number(remaining)
+   and 0 <= central <= remaining | float and 0 <= conservative <= remaining | float }}`;
+}
+
+const CONTROLLER_STATUS = "sensor.home_energy_inverter_schedule_status";
+// Separate from the existing5kW demand/HVAC threshold and7kW planning value.
+export const dispatchFailureImportThresholdW = 500;
+
+function criticalEg4UsableExpression(e) {
+  return `is_number(states('${e.batteryNetPower}')) and is_number(states('${e.batterySoc}'))
+    and is_number(states('${e.gridNetPower}'))
+    and state_attr('${e.batteryNetPower}', 'unit_of_measurement') == 'W'
+    and state_attr('${e.batterySoc}', 'unit_of_measurement') == '%'
+    and state_attr('${e.gridNetPower}', 'unit_of_measurement') == 'W'
+    and 0 <= states('${e.batterySoc}') | float <= 100
+    and health_age is number and 0 <= health_age <= 180
+    and ages is mapping
+    and ages.get('EG4 battery') is number and 0 <= ages['EG4 battery'] <= 5
+    and ages.get('EG4 battery SOC') is number and 0 <= ages['EG4 battery SOC'] <= 5
+    and ages.get('EG4 grid CT') is number and 0 <= ages['EG4 grid CT'] <= 5`;
+}
+
+function failureSourceVariables(e) {
+  return `${sharedScheduleAgeTemplate()}
+{% set ages = state_attr('${e.sourceHealth}', 'source_ages_minutes') %}
+{% set health = states['${e.sourceHealth}'] %}
+{% set health_age = as_timestamp(now()) - as_timestamp(health.last_reported, none)
+   if health is defined and health.last_reported is defined else none %}`;
+}
+
+export function peakDispatchFailureTemplate(e) {
+  return `${failureSourceVariables(e)}
+{{ ${sharedPeakExpression(e)} and (${criticalEg4UsableExpression(e)})
+    and is_number(states('${e.wholeHomeLoad}')) and is_number(states('${e.combinedSolarPower}'))
+    and state_attr('${e.wholeHomeLoad}', 'unit_of_measurement') == 'W'
+    and state_attr('${e.combinedSolarPower}', 'unit_of_measurement') == 'W'
+    and states('${e.batterySoc}') | float > 25
+    and states('${e.wholeHomeLoad}') | float - states('${e.combinedSolarPower}') | float > 1000
+    and states('${e.gridNetPower}') | float > ${dispatchFailureImportThresholdW}
+    and states('${e.batteryNetPower}') | float <= 300 }}`;
+}
+
+export function peakEg4UnusableTemplate(e) {
+  return `${failureSourceVariables(e)}
+{{ ${sharedPeakExpression(e)} and not (${criticalEg4UsableExpression(e)}) }}`;
+}
+
+function persistentFailure(title, message, latch) {
+  return [
+    { action: "persistent_notification.create", data: {
+      title, message, notification_id: `home_energy_${latch}`,
+    } },
+    { action: "input_text.set_value", target: { entity_id: `input_text.home_energy_${latch}_alert_key` },
+      data: { value: "{{ alert_key }}" } },
+  ];
+}
+
+export function buildFailureAlerts(e) {
+  const windowKey = peakControlEventKeyTemplate(e);
+  const timed = (id, title, template, message) => ({ id: `home_energy_${id}_alert`, config: {
+    alias: title, description: "Persistent Home Assistant diagnostic only; no automatic device action.",
+    triggers: [{ platform: "template", value_template: template, for: "00:10:00" }],
+    variables: { alert_key: windowKey },
+    conditions: [
+      { condition: "template", value_template: template },
+      { condition: "template", value_template: `{{ states('input_text.home_energy_${id}_alert_key') != alert_key }}` },
+    ],
+    actions: persistentFailure(title, message, id), mode: "single",
+  } });
+  const faultTemplate = `{% set status = states('${CONTROLLER_STATUS}') %}
+{% set item = states['${CONTROLLER_STATUS}'] %}
+{% set age = as_timestamp(now()) - as_timestamp(item.last_changed, as_timestamp(now())) %}
+{{ status in ['Recovery required', 'Automatic retries stopped']
+   or (status == 'Blocked' and age >= 1800) }}`;
+  const expectedTemplate = `{% set season = state_attr('${CONTROLLER_STATUS}', 'season') %}
+{% set kind = state_attr('${CONTROLLER_STATUS}', 'day_kind') %}
+{{ 'summer-weekly' if season == 'summer' and kind in ['weekday', 'weekend']
+   else season ~ '-' ~ kind if season in ['winter', 'summer'] and kind in ['weekday', 'weekend', 'holiday']
+   else '' }}`;
+  return [
+    timed("dispatch_failure", "Home Energy: peak battery support missing",
+      peakDispatchFailureTemplate(e),
+      "For ten minutes during SRP peak, reported grid import exceeded 0.5 kW while load exceeded solar by 1 kW, SOC was above 25% and the battery was not discharging above 300 W. Check the inverter schedule and current readings; this does not diagnose the cause."),
+    timed("eg4_unusable", "Home Energy: peak EG4 readings unavailable",
+      peakEg4UnusableTemplate(e),
+      "EG4 battery power, SOC or service-grid readings have been unavailable or stale for ten minutes during SRP peak. Battery dispatch cannot be verified. A recent HA report alone does not prove a fresh vendor measurement."),
+    { id: "home_energy_controller_fault_alert", config: {
+      alias: "Home Energy: inverter scheduling needs attention",
+      description: "Immediate recovery/retry-stop diagnostic or Blocked for 30 minutes; once per continuous status incident.",
+      triggers: [
+        { platform: "state", entity_id: CONTROLLER_STATUS, to: "Recovery required" },
+        { platform: "state", entity_id: CONTROLLER_STATUS, to: "Automatic retries stopped" },
+        { platform: "state", entity_id: CONTROLLER_STATUS, to: "Blocked", for: "00:30:00" },
+        { platform: "time_pattern", minutes: "/5" },
+      ],
+      variables: { alert_key: `{{ states('${CONTROLLER_STATUS}') ~ '-' ~ as_timestamp(states['${CONTROLLER_STATUS}'].last_changed, 0) | int }}` },
+      conditions: [ { condition: "template", value_template: faultTemplate },
+        { condition: "template", value_template: "{{ states('input_text.home_energy_controller_fault_alert_key') != alert_key }}" } ],
+      actions: persistentFailure("Home Energy: inverter scheduling needs attention",
+        `Status: {{ states('${CONTROLLER_STATUS}') }}. {{ state_attr('${CONTROLLER_STATUS}', 'error') or '' }} Automatic retries stopped: {{ state_attr('${CONTROLLER_STATUS}', 'retry_exhausted') == true }}. Review the retained inverter settings; automatic control does not prove current power flow.`, "controller_fault"),
+      mode: "single",
+    } },
+    { id: "home_energy_profile_mismatch_alert", config: {
+      alias: "Home Energy: check inverter profile before peak",
+      description: "Read-only profile check at 04:30 and 16:30 using the controller calendar, including weekends/holidays.",
+      triggers: [{ platform: "time", at: "04:30:00" }, { platform: "time", at: "16:30:00" }],
+      variables: { alert_key: windowKey, expected_profile: expectedTemplate },
+      conditions: [
+        { condition: "template", value_template: `{{ expected_profile | default('') != ''
+          and state_attr('${CONTROLLER_STATUS}', 'shared_tariff_validated') == true
+          and state_attr('${CONTROLLER_STATUS}', 'profile') != expected_profile | default('') }}` },
+        { condition: "template", value_template: "{{ states('input_text.home_energy_profile_mismatch_alert_key') != alert_key }}" },
+      ],
+      actions: persistentFailure("Home Energy: check inverter profile before peak",
+        `Expected {{ expected_profile | default('unavailable') }}, last verified {{ state_attr('${CONTROLLER_STATUS}', 'profile') or 'none' }}. Check scheduling before the next peak. This is a saved-profile comparison, not a fresh settings readback.`, "profile_mismatch"),
+      mode: "single",
+    } },
+  ];
+}
+
 export function buildAutomations(e) {
   const zones = hvacZones(e);
   return [
@@ -668,7 +801,7 @@ export function buildAutomations(e) {
       id: "home_energy_peak_battery_forecast_alert",
       config: {
         alias: "Home Energy — battery may not last through peak",
-        description: "Alerts when the conservative 15-minute discharge forecast reaches the 20% reserve before the active SRP peak window ends.",
+        description: "Alerts only when valid central and conservative forecasts both reach reserve before the active SRP peak ends; the conservative HVAC risk guard remains separate.",
         triggers: [
           {
             platform: "state",
@@ -687,6 +820,7 @@ export function buildAutomations(e) {
           { condition: "state", entity_id: e.peakWindow, state: "on" },
           { condition: "template", value_template: peakControlWindowTemplate(e) },
           { condition: "state", entity_id: e.peakForecastShortfall, state: "on" },
+          { condition: "template", value_template: householdShortfallTemplate(e) },
           {
             condition: "template",
             value_template: `{{ as_timestamp(now()) - as_timestamp(states['${e.peakForecastShortfall}'].last_changed, as_timestamp(now())) >= 120 }}`,
@@ -698,7 +832,7 @@ export function buildAutomations(e) {
         ],
         actions: notifyFamily(
           "Home Energy: battery shortfall forecast",
-          `The conservative forecast reaches the {{ states('${e.batteryReserve}') }}% reserve in about {{ states('${e.batteryMinutesToReserve}') }} minutes, with {{ states('${e.peakMinutesRemaining}') }} peak minutes remaining. {% if is_state('${e.hvacResponseEnabled}', 'on') %}Peak Controls is enabled and can raise selected cooling setpoints after SOC reaches {{ states('${e.hvacSocGuardrail}') }}%, subject to its one-shot safety rules.{% else %}Peak Controls is disabled, so this is a dry-run alert; consider raising cooling setpoints within your comfort limit.{% endif %}`,
+          `Both forecasts predict reaching the {{ states('${e.batteryReserve}') }}% reserve before peak ends: central {{ state_attr('${e.batteryMinutesToReserve}', 'central_minutes') | round(0) if state_attr('${e.batteryMinutesToReserve}', 'central_minutes') is number else 'unavailable' }} minutes, conservative {{ states('${e.batteryMinutesToReserve}') }} minutes, with {{ states('${e.peakMinutesRemaining}') }} peak minutes remaining. {% if is_state('${e.hvacResponseEnabled}', 'on') %}Peak Controls is enabled and can raise selected cooling setpoints after SOC reaches {{ states('${e.hvacSocGuardrail}') }}%, subject to its one-shot safety rules.{% else %}Peak Controls is disabled, so this is a dry-run alert; consider raising cooling setpoints within your comfort limit.{% endif %}`,
           e.forecastAlertKey,
         ),
         mode: "single",
@@ -744,6 +878,7 @@ export function buildAutomations(e) {
         mode: "single",
       },
     },
+    ...buildFailureAlerts(e),
     {
       id: "home_energy_peak_hvac_response",
       config: {
