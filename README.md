@@ -24,6 +24,8 @@ The dedicated [EG4 project](https://github.com/JeremyWhittaker/eg4_home_assistan
 
 Initial commissioning took place on August 30–31, 2026. The combined dashboard and seasonal controller were rebuilt and deployed on November 4; **0.2.1 remains the live component at this November 5 checkpoint**. Reviewed dashboard and alert configuration is deployed with exact readback; all 28 desktop/mobile light/dark cases passed, and representative flow captures were inspected. Controller and measurement Python corrections await installation; **0.2.2 is prepared for installation**. See [Commissioning](docs/COMMISSIONING.md) for dated acceptance and remaining checks.
 
+Restart acceptance requires Core to report **RUNNING** as well as the original integration entry being loaded. An available API can precede completed startup; thermostat and shared-policy readiness are additional live checks.
+
 The November 5 05:00 battery start was not proven: reported charging was followed by unavailable readings. A later watch recorded 109 qualified peak-demand observations with battery support. The 09:00 watch confirmed off-peak non-discharge and charger permission release, but solar had already caused reported battery charging before 09:00, so a timer-caused stop was not isolated. These results do not establish savings or actual EV energy gain.
 
 ## The system in one picture

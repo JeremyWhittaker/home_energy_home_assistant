@@ -62,6 +62,9 @@ export async function waitForHomeAssistant(options = {}) {
       if (!config || typeof config.version !== "string") {
         throw new Error("authenticated /api/config response did not contain a version");
       }
+      if (config.state !== "RUNNING") {
+        throw new Error("Home Assistant Core state is " + (config.state ?? "unknown") + ", not RUNNING");
+      }
 
       let entryStatus = null;
       if (entryDomain) {
@@ -91,7 +94,7 @@ export async function waitForHomeAssistant(options = {}) {
         }
       }
 
-      return { version: config.version, entryStatus };
+      return { version: config.version, coreState: config.state, entryStatus };
     } catch (error) {
       lastError = error;
     }

@@ -547,7 +547,7 @@ test("restart health distinguishes first install from a loaded config-entry upgr
   let entries = [];
   const fetchImpl = async (url) => {
     const path = new URL(url).pathname;
-    const value = path === "/api/config" ? { version: "2026.8.3" } : entries;
+    const value = path === "/api/config" ? { version: "2026.8.3", state: "RUNNING" } : entries;
     return new Response(JSON.stringify(value), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -579,6 +579,29 @@ test("restart health distinguishes first install from a loaded config-entry upgr
   entries = [{ domain: "home_energy_monitor", state: "loaded" }];
   const upgrade = await waitForHomeAssistant({ ...options, allowMissingEntry: false });
   assert.equal(upgrade.entryStatus, "loaded");
+});
+
+test("restart health waits for Core RUNNING even when its API and entry already respond", async () => {
+  const options = { baseUrl: "http://home-assistant.test", token: "test-token", timeoutMs: 20,
+    retryDelayMs: 0, entryDomain: "home_energy_monitor" };
+  for (const state of ["NOT_RUNNING", "STARTING", "STOPPING", null]) {
+    const fetchImpl = async (url) => new Response(JSON.stringify(
+      new URL(url).pathname === "/api/config"
+        ? { version: "2026.10.4", state }
+        : [{ domain: "home_energy_monitor", state: "loaded" }]
+    ), { status: 200 });
+    await assert.rejects(waitForHomeAssistant({ ...options, fetchImpl }), /not RUNNING/);
+  }
+  let configReads = 0;
+  const fetchImpl = async (url) => new Response(JSON.stringify(
+    new URL(url).pathname === "/api/config"
+      ? { version: "2026.10.4", state: ++configReads < 3 ? "STARTING" : "RUNNING" }
+      : [{ domain: "home_energy_monitor", state: "loaded" }]
+  ), { status: 200 });
+  const ready = await waitForHomeAssistant({ ...options, timeoutMs: 100, fetchImpl });
+  assert.equal(ready.coreState, "RUNNING");
+  assert.equal(ready.entryStatus, "loaded");
+  assert.equal(configReads, 3);
 });
 
 test("authenticated control validates Home Assistant configuration", async () => {
