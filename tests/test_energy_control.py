@@ -115,6 +115,10 @@ class FakeBackend:
             "globals": deepcopy(self.parameters),
             "weekly": deepcopy(self.weekly) if weekly else {},
             "read_at": "2026-11-04T23:00:00+00:00",
+            "clock_received_at": {
+                key: self.now().isoformat()
+                for key in ("HOLD_TIME", "inverterRuntimeDeviceTime")
+            },
             "clock": self.clock_override
             if self.clock_override is not None
             else {
@@ -419,7 +423,7 @@ async def test_missing_invalid_or_skewed_inverter_clock_blocks_writes(hass, cloc
     backend.clock_override = clocks
     result = await control.async_apply()
     assert result["status"] == "Blocked"
-    assert "clock" in result["error"]
+    assert result["error"]
     assert not any(x[0] == "write" for x in backend.events)
 
 
@@ -569,10 +573,11 @@ async def test_explicit_rollback_will_not_reactivate_a_changed_weekly_table(hass
     backend.weekly["ubACChgPowerCMD1_Day_1"] = 9
     before = deepcopy(backend.parameters)
     result = await control.async_rollback()
-    assert result["status"] == "Recovery required"
+    assert result["status"] == "Rollback blocked"
     assert backend.parameters == before
     assert backend.parameters[WEEKLY] is False
-    assert control.recovery_required
+    assert not control.recovery_required
+    assert control.transaction["state"] == "verified"
 
 
 async def test_summer_weekends_keep_the_preserved_native_weekly_recipe(hass):
@@ -587,3 +592,340 @@ async def test_summer_weekends_keep_the_preserved_native_weekly_recipe(hass):
         backend.parameters["HOLD_AC_CHARGE_SOC_LIMIT"]
         == (control.baseline["globals"]["HOLD_AC_CHARGE_SOC_LIMIT"])
     )
+
+
+@pytest.mark.parametrize("failure", ["invalid", "stale", "future"])
+async def test_tariff_recovery_requires_a_fresh_read_even_inside_verification_cache(
+    hass, failure
+):
+    control, backend, store, clock = await manager(hass)
+    await control.async_apply()
+    original = deepcopy(store.data["transaction"])
+    if failure == "invalid":
+        hass.states.async_set("input_boolean.juicebox_srp_schedule_valid", "off")
+    else:
+        delta = timedelta(seconds=-181 if failure == "stale" else 1)
+        hass.states.async_set(
+            "automation.juicebox_apply_local_charge_policy",
+            "on",
+            {"last_triggered": clock[0] + delta},
+        )
+    assert (await control.async_apply())["status"] == "Blocked"
+    fresh_helper(hass, clock, "2026-11-04T16:31:00-07:00")
+    hass.states.async_set("input_boolean.juicebox_srp_schedule_valid", "on")
+    before = len(backend.events)
+    result = await control.async_apply()
+    assert result["status"] == "Applied and verified" and result["error"] is None
+    assert result["last_verified"] == clock[0].isoformat()
+    assert any(x[0] == "read" for x in backend.events[before:])
+    assert not any(x[0] == "write" for x in backend.events[before:])
+    assert store.data["transaction"] == original
+
+
+@pytest.mark.parametrize("latched", [False, True])
+async def test_failed_preview_and_recovered_preview_preserve_operating_state(hass, latched):
+    control, backend, store, clock = await manager(hass)
+    await control.async_apply()
+    if latched:
+        control.enabled = False
+        control.recovery_required = True
+        control.status, control.error = "Recovery required", "Prior recovery failed"
+        control.backoff_until = clock[0] + timedelta(minutes=2)
+    before = deepcopy(control.state())
+    saved = deepcopy(store.saves)
+    events = len(backend.events)
+    backend.clock_override = {
+        "HOLD_TIME": (clock[0] - timedelta(seconds=66)).strftime("%Y-%m-%d %H:%M:%S"),
+        "inverterRuntimeDeviceTime": (clock[0] - timedelta(seconds=131)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
+    }
+    failed = await control.async_apply(dry_run=True)
+    assert failed["dry_run"] and not failed["preview_ready"]
+    assert "Runtime frame" in failed["preview_error"]
+    assert failed["runtime_frame_age_seconds"] == 131
+    assert control.state() == before
+    backend.clock_override = None
+    good = await control.async_apply(dry_run=True)
+    assert good["preview_ready"] and good["preview_error"] is None
+    assert control.state() == before
+    assert store.saves == saved
+    assert not any(x[0] == "write" for x in backend.events[events:])
+    if latched:
+        with pytest.raises(ControlError, match="Restore"):
+            await control.async_set_enabled(True)
+
+
+async def test_tariff_invalid_preview_preserves_latched_error_and_backoff(hass):
+    control, backend, _, clock = await manager(hass)
+    control.recovery_required = True
+    control.status, control.error = "Recovery required", "Interrupted write"
+    control.backoff_until = clock[0] + timedelta(minutes=5)
+    before = deepcopy(control.state())
+    hass.states.async_set("input_boolean.juicebox_srp_schedule_valid", "off")
+    result = await control.async_apply(dry_run=True)
+    assert not result["preview_ready"] and "invalid" in result["preview_error"]
+    assert control.status == before["status"] and control.error == before["error"]
+    assert control.backoff_until == clock[0] + timedelta(minutes=5)
+    assert control.recovery_required and backend.events == []
+
+
+async def test_initial_preview_captures_baseline_once_without_changing_operating_state(hass):
+    control, backend, store, _ = await manager(hass)
+    control.enabled, control.status = False, "Disabled"
+    before = deepcopy(control.state())
+    first = await control.async_apply(dry_run=True)
+    assert first["preview_ready"] and first["changes"]
+    assert control.baseline and len(store.saves) == 1
+    await control.async_apply(dry_run=True)
+    assert len(store.saves) == 1
+    assert control.state() == before
+    assert not any(x[0] == "write" for x in backend.events)
+
+
+@pytest.mark.parametrize(
+    ("hold_offset", "frame_age", "message"),
+    [
+        (121, 0, "RTC"),
+        (-121, 0, "RTC"),
+        (66, 131, "Runtime frame is older"),
+        (0, -1, "Runtime frame timestamp is in the future"),
+    ],
+)
+async def test_actual_rtc_and_frame_age_have_distinct_strict_failures(
+    hass, hold_offset, frame_age, message
+):
+    control, backend, _, clock = await manager(hass)
+    backend.clock_override = {
+        "HOLD_TIME": (clock[0] - timedelta(seconds=hold_offset)).strftime("%Y-%m-%d %H:%M:%S"),
+        "inverterRuntimeDeviceTime": (clock[0] - timedelta(seconds=frame_age)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
+    }
+    result = await control.async_apply()
+    assert result["status"] == "Blocked" and message in result["error"]
+    assert not any(x[0] == "write" for x in backend.events)
+    if frame_age == 131:
+        assert result["clock_skew_seconds"] == {"HOLD_TIME": 66}
+        assert result["runtime_frame_age_seconds"] == 131
+        backend.clock_override = None
+        fresh_helper(hass, clock, "2026-11-04T16:36:00-07:00")
+        assert (await control.async_apply())["status"] == "Applied and verified"
+
+
+async def test_receipt_provenance_separates_rtc_offset_from_bulk_read_elapsed_time(hass):
+    control, backend, _, clock = await manager(hass)
+    snap = await backend.snapshot(weekly=True)
+    snap["clock"]["HOLD_TIME"] = (clock[0] - timedelta(seconds=120)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    clock[0] += timedelta(seconds=4)
+    control._validate_clock(snap)
+    assert control.clock_skew_seconds == {"HOLD_TIME": 120}
+    assert control.runtime_frame_age_seconds == 4
+    assert control.clock_receipt_age_seconds["HOLD_TIME"] == 4
+    clock[0] += timedelta(seconds=117)
+    with pytest.raises(ControlError, match="receipt is stale"):
+        control._validate_clock(snap)
+
+
+@pytest.mark.parametrize("receipt", [None, "2026-11-04T16:30:00", "2026-11-04T16:30:01-07:00"])
+async def test_missing_naive_or_future_receipt_cannot_admit_a_write(hass, receipt):
+    control, backend, _, _ = await manager(hass)
+    snapshot = await backend.snapshot(weekly=True)
+    snapshot["clock_received_at"]["HOLD_TIME"] = receipt
+    with pytest.raises(ControlError, match="receipt"):
+        control._validate_clock(snapshot)
+    assert not any(x[0] == "write" for x in backend.events)
+
+
+async def test_persistent_postwrite_mismatch_stops_after_three_rollbacks_and_can_resume(hass):
+    control, backend, store, clock = await manager(hass)
+    write = backend.write
+    broken = True
+
+    async def persistently_ignore_target(command):
+        if (
+            broken
+            and command.parameter == "HOLD_AC_CHARGE_END_TIME"
+            and command.values == (5, 0)
+        ):
+            backend.ignore_once = command.parameter
+        await write(command)
+
+    backend.write = persistently_ignore_target
+    original = deepcopy(backend.parameters)
+    for attempt, stamp in enumerate(
+        [
+            "2026-11-04T16:30:00-07:00",
+            "2026-11-04T16:36:00-07:00",
+            "2026-11-04T16:42:00-07:00",
+        ],
+        1,
+    ):
+        fresh_helper(hass, clock, stamp)
+        result = await control.async_apply()
+        assert control.post_write_failures == attempt
+        assert backend.parameters == original  # Every rollback really restored its basis.
+        assert not control.recovery_required
+    assert result["status"] == "Automatic retries stopped"
+    assert not control.enabled and control.retry_exhausted
+    assert store.data["retry_exhausted"] and store.data["post_write_failures"] == 3
+    before = list(backend.events)
+    assert (await control.async_apply())["status"] == "Automatic retries stopped"
+    assert backend.events == before
+    await control.async_load()
+    assert not control.enabled and control.retry_exhausted
+    broken = False
+    result = await control.async_set_enabled(True)
+    assert result["status"] == "Applied and verified"
+    assert control.post_write_failures == 0 and not store.data["retry_exhausted"]
+    await control.async_shutdown()
+
+
+async def test_readonly_failure_does_not_consume_postwrite_retry_budget(hass):
+    control, backend, _, clock = await manager(hass)
+    backend.clock_override = {"HOLD_TIME": "bad"}
+    for stamp in ["2026-11-04T16:30:00-07:00", "2026-11-04T16:36:00-07:00"]:
+        fresh_helper(hass, clock, stamp)
+        await control.async_apply()
+    assert control.post_write_failures == 0 and not control.retry_exhausted
+    assert not any(x[0] == "write" for x in backend.events)
+
+
+async def test_rollback_without_a_journal_is_a_prewrite_refusal_not_a_recovery_latch(hass):
+    control, backend, store, _ = await manager(hass)
+    result = await control.async_rollback()
+    assert result["status"] == "Rollback blocked"
+    assert not control.recovery_required and not store.data["recovery_required"]
+    assert not any(x[0] == "write" for x in backend.events)
+    assert (await control.async_set_enabled(True))["status"] == "Applied and verified"
+
+
+async def test_interrupted_rollback_refusal_keeps_the_real_latch(hass):
+    control, backend, store, _ = await manager(hass)
+    await control.async_apply()
+    control.transaction["state"] = "writing"
+    control.recovery_required = True
+    backend.weekly["ubACChgPowerCMD1_Day_1"] = 99
+    before = len(backend.events)
+    result = await control.async_rollback()
+    assert result["status"] == "Recovery required"
+    assert control.recovery_required and store.data["recovery_required"]
+    assert not any(x[0] == "write" for x in backend.events[before:])
+    with pytest.raises(ControlError, match="Restore"):
+        await control.async_set_enabled(True)
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    ["2026-11-07T16:30:00-07:00", "2026-11-26T16:30:00-07:00", "2026-07-03T16:30:00-07:00"],
+)
+async def test_nonpeak_preview_and_applied_settings_use_the_admitted_pure_recipe(hass, stamp):
+    from custom_components.home_energy_monitor.seasonal_policy import build_profile_plan
+
+    control, backend, _, clock = await manager(hass)
+    await control.async_apply()
+    fresh_helper(hass, clock, stamp)
+    plan = build_profile_plan(
+        clock[0],
+        shared=control._shared(),
+        native_weekly_enabled=False,
+        weekly_backup_verified=True,
+        daily_plan_verified=True,
+    )
+    assert plan.can_apply
+    profile = plan.desired_profile
+    assert profile is not None
+    preview = await control.async_apply(dry_run=True)
+    assert preview["preview_ready"]
+    assert (await control.async_apply())["status"] == "Applied and verified"
+    for change in preview["changes"]:
+        assert [backend.parameters[key] for key in change["keys"]] == list(change["values"])
+    for index, window in enumerate(profile.ac_windows):
+        suffix = "" if index == 0 else f"_{index}"
+        assert (
+            f"{backend.parameters['HOLD_AC_CHARGE_START_HOUR' + suffix]:02}:00"
+            == window.window.start
+        )
+        assert (
+            f"{backend.parameters['HOLD_AC_CHARGE_END_HOUR' + suffix]:02}:00"
+            == window.window.end
+        )
+        assert backend.parameters["HOLD_AC_CHARGE_POWER_CMD"] == window.power_kw == 4
+    assert backend.parameters["FUNC_FORCED_CHG_EN"] is profile.pv_priority_enabled is True
+    assert profile.pv_windows[0].start == "09:00"
+    assert backend.parameters["HOLD_FORCED_CHARGE_START_HOUR"] == 9
+    assert profile.pv_windows[0].end == "15:00"
+    assert backend.parameters["HOLD_FORCED_CHARGE_END_HOUR"] == 15
+    assert backend.parameters["FUNC_GRID_PEAK_SHAVING"] is profile.peak_shaving_enabled is False
+    assert backend.parameters["HOLD_DISCHG_CUT_OFF_SOC_EOD"] == 20
+
+
+async def test_snapshot_retains_receipts_for_each_range_and_its_actual_clock_origin():
+    clock = datetime.fromisoformat("2026-11-04T16:30:00-07:00")
+
+    async def response(_method, _endpoint, *, data):
+        if data["startRegister"] == 0:
+            return {
+                "success": True,
+                WEEKLY: True,
+                "HOLD_TIME": "2026-11-04 16:29:08",
+                "inverterRuntimeDeviceTime": "2026-11-04 16:30:00",
+            }
+        return {"success": True, WEEKLY: True}
+
+    with patch("custom_components.home_energy_monitor.energy_control.datetime") as dates:
+        dates.now.side_effect = [clock + timedelta(seconds=x) for x in (0, 1, 2, 3, 4)]
+        snapshot = await Eg4CloudBackend(
+            SimpleNamespace(_request=AsyncMock(side_effect=response)), "test-inverter"
+        ).snapshot(weekly=False)
+    assert [r["start"] for r in snapshot["read_receipts"]] == [0, 127, 240, 233]
+    assert (
+        snapshot["read_receipts"][-1]["received_at"]
+        == (clock + timedelta(seconds=3)).isoformat()
+    )
+    assert snapshot["clock_received_at"] == {
+        "HOLD_TIME": clock.isoformat(),
+        "inverterRuntimeDeviceTime": clock.isoformat(),
+    }
+    assert snapshot["read_at"] == (clock + timedelta(seconds=4)).isoformat()
+
+
+async def test_rollback_clock_refusal_before_a_write_preserves_verified_journal(hass):
+    control, backend, store, clock = await manager(hass)
+    await control.async_apply()
+    before = len(backend.events)
+    journal = deepcopy(store.data["transaction"])
+    backend.clock_override = {
+        "HOLD_TIME": clock[0].strftime("%Y-%m-%d %H:%M:%S"),
+        "inverterRuntimeDeviceTime": (clock[0] - timedelta(seconds=131)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
+    }
+    result = await control.async_rollback()
+    assert result["status"] == "Rollback blocked" and not control.recovery_required
+    assert control.transaction == journal == store.data["transaction"]
+    assert not any(x[0] == "write" for x in backend.events[before:])
+    backend.clock_override = None
+    assert (await control.async_rollback())["status"] == "Restored prior settings"
+
+
+async def test_restore_journal_save_failure_before_first_write_does_not_latch(hass):
+    control, backend, store, _ = await manager(hass)
+    await control.async_apply()
+    before = len(backend.events)
+    snapshot = backend.snapshot
+
+    async def reject_store_after_preflight(*, weekly):
+        value = await snapshot(weekly=weekly)
+        store.fail = True
+        return value
+
+    backend.snapshot = reject_store_after_preflight
+    result = await control.async_rollback()
+    assert result["status"] == "Rollback blocked" and not control.recovery_required
+    assert control.transaction["state"] == "verified"
+    assert "rollback_pending" not in control.transaction
+    assert not any(x[0] == "write" for x in backend.events[before:])
+    assert store.data["transaction"]["state"] == "verified"

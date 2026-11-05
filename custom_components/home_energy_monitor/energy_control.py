@@ -41,6 +41,7 @@ from .seasonal_policy import (
 WEEKLY = "FUNC_ENERTEK_WORKING_MODE"
 VERIFY_INTERVAL = timedelta(minutes=15)
 ERROR_BACKOFF = timedelta(minutes=5)
+MAX_POST_WRITE_FAILURES = 3
 READ_ENDPOINT = "/WManage/web/maintain/remoteRead/read"
 WEEKLY_ENDPOINT = "/WManage/web/maintain/remoteWeeklyOperation/readValues"
 WRITE_TIME_ENDPOINT = "/WManage/web/maintain/remoteSet/writeTime"
@@ -184,6 +185,8 @@ class Eg4CloudBackend:
     async def snapshot(self, *, weekly: bool) -> dict[str, Any]:
         parameters: dict[str, float | bool] = {}
         clocks: dict[str, str] = {}
+        clock_received_at: dict[str, str] = {}
+        read_receipts: list[dict[str, Any]] = []
         for start, count in ((0, 127), (127, 127), (240, 127), (233, 1)):
             response = await self._request(
                 READ_ENDPOINT,
@@ -194,10 +197,13 @@ class Eg4CloudBackend:
                     "autoRetry": False,
                 },
             )
+            received_at = datetime.now(UTC).isoformat()
+            read_receipts.append({"start": start, "count": count, "received_at": received_at})
             parameters.update(_numeric(response))
             for key in ("HOLD_TIME", "inverterRuntimeDeviceTime"):
                 if key in response and isinstance(response[key], str):
                     clocks[key] = response[key]
+                    clock_received_at[key] = received_at
         if WEEKLY not in parameters or parameters[WEEKLY] not in (True, False):
             raise ControlError("Native weekly authority could not be read")
         weekly_values: dict[str, float | bool] = {}
@@ -213,27 +219,36 @@ class Eg4CloudBackend:
                     "autoRetry": False,
                 },
             )
+            read_receipts.append(
+                {"start": 200, "count": 40, "received_at": datetime.now(UTC).isoformat()}
+            )
             if _numeric(selector).get(WEEKLY) != parameters[WEEKLY]:
                 raise ControlError("Native weekly authority changed while reading its backup")
             for start, count in ((500, 112), (612, 112)):
-                weekly_values.update(
-                    _numeric(
-                        await self._request(
-                            WEEKLY_ENDPOINT,
-                            {
-                                "inverterSn": self.serial,
-                                "startRegister": start,
-                                "pointNumber": count,
-                            },
-                        )
-                    )
+                response = await self._request(
+                    WEEKLY_ENDPOINT,
+                    {
+                        "inverterSn": self.serial,
+                        "startRegister": start,
+                        "pointNumber": count,
+                    },
                 )
+                read_receipts.append(
+                    {
+                        "start": start,
+                        "count": count,
+                        "received_at": datetime.now(UTC).isoformat(),
+                    }
+                )
+                weekly_values.update(_numeric(response))
             if not _weekly_complete(weekly_values):
                 raise ControlError("The complete seven-day weekly backup could not be read")
         return {
             "serial": self.serial,
             "globals": parameters,
             "clock": clocks,
+            "clock_received_at": clock_received_at,
+            "read_receipts": read_receipts,
             "weekly": weekly_values,
             "read_at": datetime.now(UTC).isoformat(),
         }
@@ -354,6 +369,12 @@ class EnergyControlManager:
         self.backoff_until: datetime | None = None
         self.recovery_required = False
         self.clock_skew_seconds: dict[str, float] = {}
+        self.runtime_frame_age_seconds: float | None = None
+        self.clock_receipt_age_seconds: dict[str, float] = {}
+        self.clock_received_at: dict[str, str] = {}
+        self.post_write_failures = 0
+        self.retry_exhausted = False
+        self._write_attempts = 0
         self._lock = asyncio.Lock()
         self._shutdown = False
         self._unsubscribe: Callable[[], None] | None = None
@@ -363,6 +384,8 @@ class EnergyControlManager:
         data = await self.store.async_load() or {}
         self.enabled = data.get("enabled") is True
         self.baseline, self.transaction = data.get("baseline"), data.get("transaction")
+        self.post_write_failures = int(data.get("post_write_failures", 0))
+        self.retry_exhausted = data.get("retry_exhausted") is True
         self.recovery_required = data.get("recovery_required") is True or bool(
             self.transaction
             and (
@@ -372,6 +395,8 @@ class EnergyControlManager:
         )
         if self.recovery_required:
             self.enabled, self.status = False, "Recovery required"
+        elif self.retry_exhausted:
+            self.enabled, self.status = False, "Automatic retries stopped"
         self._unsubscribe = async_track_time_interval(
             self.hass, self._tick, timedelta(minutes=1)
         )
@@ -384,6 +409,8 @@ class EnergyControlManager:
                     "baseline": self.baseline,
                     "transaction": self.transaction,
                     "recovery_required": self.recovery_required,
+                    "post_write_failures": self.post_write_failures,
+                    "retry_exhausted": self.retry_exhausted,
                 }
             )
         except Exception as err:
@@ -443,24 +470,44 @@ class EnergyControlManager:
         return Eg4CloudBackend(client, serial)
 
     def _validate_clock(self, snapshot: dict[str, Any]) -> None:
-        """Schedule boundaries are meaningful only on a fresh local inverter clock."""
+        """Separate RTC offset at receipt from runtime-frame age at validation."""
         self.clock_skew_seconds = {}
-        clocks = snapshot.get("clock", {})
+        self.runtime_frame_age_seconds = None
+        self.clock_receipt_age_seconds = {}
+        self.clock_received_at = {}
         now = self._now().astimezone(PHOENIX)
+        clocks = snapshot.get("clock", {})
+        receipts = snapshot.get("clock_received_at", {})
         for key in ("HOLD_TIME", "inverterRuntimeDeviceTime"):
-            value = clocks.get(key)
-            if not isinstance(value, str):
-                raise ControlError("The inverter clock could not be verified")
+            label = "Inverter RTC" if key == "HOLD_TIME" else "Runtime frame"
             try:
-                stamp = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=PHOENIX)
-            except ValueError:
-                raise ControlError("The inverter clock format could not be verified") from None
-            skew = (now - stamp).total_seconds()
-            self.clock_skew_seconds[key] = round(skew, 1)
-            if abs(skew) > 120:
-                raise ControlError(
-                    "The inverter clock differs from Phoenix time by over two minutes"
+                stamp = datetime.strptime(clocks[key], "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=PHOENIX
                 )
+                received = datetime.fromisoformat(receipts[key])
+                if received.tzinfo is None or received.utcoffset() is None:
+                    raise ValueError("Naive receipt")
+            except (KeyError, TypeError, ValueError):
+                raise ControlError(f"{label} clock or receipt could not be verified") from None
+            receipt_age = (now - received).total_seconds()
+            self.clock_received_at[key] = received.isoformat()
+            self.clock_receipt_age_seconds[key] = round(receipt_age, 1)
+            if not 0 <= receipt_age <= 120:
+                raise ControlError(f"{label} receipt is stale or in the future")
+            if key == "HOLD_TIME":
+                offset = (received - stamp).total_seconds()
+                self.clock_skew_seconds[key] = round(offset, 1)
+                if abs(offset) > 120:
+                    raise ControlError(
+                        "Inverter clock (RTC) differs from Phoenix time by over two minutes"
+                    )
+            else:
+                frame_age = (now - stamp).total_seconds()
+                self.runtime_frame_age_seconds = round(frame_age, 1)
+                if stamp > received:
+                    raise ControlError("Runtime frame timestamp is in the future")
+                if not 0 <= frame_age <= 120:
+                    raise ControlError("Runtime frame is older than two minutes")
 
     async def _tick(self, _now: datetime) -> None:
         if not self._shutdown:
@@ -470,9 +517,20 @@ class EnergyControlManager:
         if enabled and self.recovery_required:
             raise ControlError("Restore the interrupted transaction before enabling control")
         self.enabled = bool(enabled)
+        if enabled:
+            # An explicit re-enable acknowledges a stopped retry series. A real
+            # interrupted/failed rollback latch above still requires recovery.
+            self.post_write_failures, self.retry_exhausted = 0, False
+            self.backoff_until = None
         await self._save()
         if not self.enabled:
-            self.status = "Disabled"
+            self.status = (
+                "Recovery required"
+                if self.recovery_required
+                else "Automatic retries stopped"
+                if self.retry_exhausted
+                else "Disabled"
+            )
             self._publish()
             return self.state()
         return await self.async_apply()
@@ -490,6 +548,11 @@ class EnergyControlManager:
             if self.last_verified
             else None,
             "clock_skew_seconds": self.clock_skew_seconds,
+            "runtime_frame_age_seconds": self.runtime_frame_age_seconds,
+            "clock_receipt_age_seconds": self.clock_receipt_age_seconds,
+            "clock_received_at": self.clock_received_at,
+            "post_write_failures": self.post_write_failures,
+            "retry_exhausted": self.retry_exhausted,
             "shared_tariff_validated": tariff.shared_validated,
             "expected_on_peak": tariff.expected_on_peak,
             "on_peak": tariff.on_peak,
@@ -508,13 +571,12 @@ class EnergyControlManager:
         self.transaction["undo"].append(inverse.record())
         self.transaction["pending"] = command.record()
         await self._save()  # Must succeed before the device can be touched.
+        self._write_attempts += 1
         await backend.write(command)
 
     async def _restore(self, backend: Any) -> None:
         if not self.transaction:
             raise ControlError("No rollback snapshot is available")
-        self.transaction["state"] = "restoring"
-        await self._save()
         original = self.transaction["snapshot"]["globals"]
         mode = Command("function", WEEKLY, (WEEKLY,), (bool(original[WEEKLY]),))
         undo = [Command.from_record(x) for x in self.transaction.get("undo", [])]
@@ -529,14 +591,30 @@ class EnergyControlManager:
                 "The original weekly table changed; automatic rollback is blocked"
             )
 
+        self._validate_clock(actual)
+
         async def restore_one(command: Command) -> None:
             nonlocal actual
             if command.matches(actual["globals"]):
                 return
+            prior_state = self.transaction["state"]
+            prior_pending = self.transaction.get("rollback_pending")
+            self.transaction["state"] = "restoring"
             self.transaction["rollback_pending"] = command.record()
-            await self._save()
+            try:
+                await self._save()
+            except ControlError:
+                # A journal refusal before backend.write is not a partial restore.
+                self.transaction["state"] = prior_state
+                if prior_pending is None:
+                    self.transaction.pop("rollback_pending", None)
+                else:
+                    self.transaction["rollback_pending"] = prior_pending
+                raise
+            self._write_attempts += 1
             await backend.write(command)
             actual = await backend.snapshot(weekly=False)
+            self._validate_clock(actual)
             if not command.matches(actual["globals"]):
                 raise ControlError("A rollback setting failed fresh readback")
 
@@ -566,10 +644,22 @@ class EnergyControlManager:
         async with self._lock:
             self.enabled = False
             await self._save()
+            was_interrupted = self.recovery_required or bool(
+                self.transaction
+                and (
+                    self.transaction.get("state") in ("writing", "restoring")
+                    or self.transaction.get("pending")
+                    or self.transaction.get("rollback_pending")
+                )
+            )
+            writes_before = self._write_attempts
             try:
                 await self._restore(self._backend())
             except Exception as err:
-                self.status, self.recovery_required = "Recovery required", True
+                self.recovery_required = was_interrupted or self._write_attempts > writes_before
+                self.status = (
+                    "Recovery required" if self.recovery_required else "Rollback blocked"
+                )
                 self.error = (
                     str(err)
                     if isinstance(err, ControlError)
@@ -579,178 +669,222 @@ class EnergyControlManager:
                     await self._save()
             else:
                 self.status, self.error = "Restored prior settings", None
-            self.last_verified, self.last_profile = None, None
+                self.post_write_failures, self.retry_exhausted = 0, False
+                self.backoff_until = None
+                await self._save()
+            if self._write_attempts > writes_before or not self.error:
+                self.last_verified, self.last_profile = None, None
             self._publish()
             return self.state()
 
     async def async_apply(self, dry_run: bool = False) -> dict[str, Any]:
         async with self._lock:
-            now = self._now()
-            tariff = evaluate_tariff(now, shared=self._shared())
-            if not self.enabled and not dry_run:
-                self.status = "Recovery required" if self.recovery_required else "Disabled"
-                self._publish()
-                return self.state()
-            if not tariff.shared_validated:
-                self.status, self.error = "Blocked", tariff.reason
-                self._publish()
-                return self.state()
-            if self.recovery_required and not dry_run:
-                self.status = "Recovery required"
-                return self.state()
-            if self.backoff_until and now < self.backoff_until and not dry_run:
-                return self.state()
-            ordinary_summer = tariff.season == "summer" and tariff.day_kind != "holiday"
-            key = f"{tariff.season}-{'weekly' if ordinary_summer else tariff.day_kind}"
-            if (
-                not dry_run
-                and key == self.last_profile
-                and self.last_verified
-                and now - self.last_verified < VERIFY_INTERVAL
-            ):
-                self._publish()
-                return self.state()
-            attempted = False
+            if not dry_run:
+                return await self._apply(dry_run=False)
+            diagnostics = (
+                self.clock_skew_seconds,
+                self.runtime_frame_age_seconds,
+                self.clock_receipt_age_seconds,
+                self.clock_received_at,
+            )
             try:
-                backend = self._backend()
-                need_weekly = self.baseline is None or key == "summer-weekly"
-                snapshot = await backend.snapshot(weekly=need_weekly)
-                if snapshot["globals"].get(WEEKLY) and not _weekly_complete(snapshot["weekly"]):
-                    snapshot = await backend.snapshot(weekly=True)
-                self._validate_clock(snapshot)
-                _safe_baseline(snapshot["globals"])
-                if self.baseline is None:
-                    if not snapshot["globals"][WEEKLY] or not _weekly_complete(
-                        snapshot["weekly"]
-                    ):
-                        raise ControlError(
-                            "A complete active summer weekly baseline is required first"
-                        )
-                    self.baseline = snapshot
-                    await self._save()
-                elif snapshot["serial"] != self.baseline["serial"]:
-                    raise ControlError(
-                        "The loaded inverter does not match the private baseline"
-                    )
-                if key == "summer-weekly":
-                    if snapshot["weekly"] != self.baseline["weekly"]:
-                        raise ControlError(
-                            "Native weekly tables changed; review before summer restoration"
-                        )
-                    commands = self._baseline_commands()
-                    target_weekly = True
-                else:
-                    plan = build_profile_plan(
-                        now,
-                        shared=self._shared(),
-                        native_weekly_enabled=bool(snapshot["globals"][WEEKLY]),
-                        weekly_backup_verified=_weekly_complete(self.baseline["weekly"]),
-                        daily_plan_verified=True,
-                        off_peak_power_kw=4,
-                    )
-                    if not plan.can_apply or plan.desired_profile is None:
-                        raise ControlError("; ".join(plan.reasons))
-                    profile = plan.desired_profile
-                    if tariff.day_kind != "weekday":
-                        # Two non-equal legal windows cover midnight without guessing
-                        # whether a 23:59 endpoint includes that entire minute.
-                        profile = InverterProfile(
-                            name=key,
-                            season=tariff.season,
-                            day_kind=tariff.day_kind,
-                            ac_windows=(
-                                ChargeWindow(TimeWindow("00:00", "12:00"), 4, 101),
-                                ChargeWindow(TimeWindow("12:00", "00:00"), 4, 101),
-                            ),
-                            pv_windows=(TimeWindow("09:00", "15:00"),),
-                            peak_windows=(),
-                            peak_shaving_enabled=False,
-                        )
-                    commands = _profile_commands(profile)
-                    target_weekly = False
-                for command in commands:
-                    command.inverse(snapshot["globals"])
-                changes = [x for x in commands if not x.matches(snapshot["globals"])]
-                mode = Command("function", WEEKLY, (WEEKLY,), (target_weekly,))
-                if dry_run:
-                    return {
-                        **self.state(),
-                        "dry_run": True,
-                        "desired_profile": key,
-                        "changes": [x.record() for x in changes],
-                        "authority_change": not mode.matches(snapshot["globals"]),
-                    }
-                if not changes and mode.matches(snapshot["globals"]):
-                    # Keep the last real undo journal useful after routine rechecks.
-                    self.last_verified, self.last_profile = self._now(), key
-                    self.status, self.error, self.backoff_until = (
-                        "Applied and verified",
-                        None,
-                        None,
-                    )
-                    self._publish()
-                    return self.state()
-                self.transaction = {
-                    "state": "writing",
-                    "snapshot": snapshot,
-                    "undo": [],
-                    "profile": key,
-                }
-                await self._save()
-                for command in changes:
-                    attempted = True
-                    await self._journaled_write(
-                        backend, command, command.inverse(snapshot["globals"])
-                    )
-                readback = await backend.snapshot(weekly=False)
-                self._validate_clock(readback)
-                if any(not x.matches(readback["globals"]) for x in commands):
-                    raise ControlError(
-                        "Daily profile readback does not match; authority was not switched"
-                    )
-                if not mode.matches(readback["globals"]):
-                    attempted = True
-                    await self._journaled_write(
-                        backend, mode, mode.inverse(snapshot["globals"])
-                    )
-                verified = await backend.snapshot(weekly=False)
-                self._validate_clock(verified)
-                if not mode.matches(verified["globals"]) or any(
-                    not x.matches(verified["globals"]) for x in commands
-                ):
-                    raise ControlError("Final inverter profile verification failed")
-                self.transaction["state"] = "verified"
-                self.transaction.pop("pending", None)
-                self.last_verified, self.last_profile = self._now(), key
-                self.status, self.error, self.backoff_until = "Applied and verified", None, None
-                await self._save()
-            except Exception as err:
-                rollback_failed = False
-                if attempted:
-                    try:
-                        await self._restore(backend)
-                    except Exception:
-                        rollback_failed = True
-                        self.enabled, self.recovery_required = False, True
-                        with suppress(ControlError):
-                            await self._save()
-                if attempted:
-                    self.last_verified, self.last_profile = None, None
-                self.status = (
-                    "Recovery required"
-                    if rollback_failed
-                    else "Error; prior settings restored"
-                    if attempted
-                    else "Blocked"
-                )
-                self.error = (
-                    str(err)
-                    if isinstance(err, ControlError)
-                    else f"Scheduling failed ({type(err).__name__})"
-                )
-                self.backoff_until = now + ERROR_BACKOFF
+                return await self._apply(dry_run=True)
+            finally:
+                (
+                    self.clock_skew_seconds,
+                    self.runtime_frame_age_seconds,
+                    self.clock_receipt_age_seconds,
+                    self.clock_received_at,
+                ) = diagnostics
+
+    def _preview(self, error: str | None = None, **details: Any) -> dict[str, Any]:
+        return {
+            **self.state(),
+            "dry_run": True,
+            "preview_ready": error is None,
+            "preview_error": error,
+            **details,
+        }
+
+    async def _apply(self, dry_run: bool) -> dict[str, Any]:
+        now = self._now()
+        tariff = evaluate_tariff(now, shared=self._shared())
+        if not self.enabled and not dry_run:
+            self.status = (
+                "Recovery required"
+                if self.recovery_required
+                else "Automatic retries stopped"
+                if self.retry_exhausted
+                else "Disabled"
+            )
             self._publish()
             return self.state()
+        if not tariff.shared_validated:
+            if dry_run:
+                return self._preview(tariff.reason)
+            self.status, self.error = "Blocked", tariff.reason
+            self._publish()
+            return self.state()
+        if self.recovery_required and not dry_run:
+            self.status = "Recovery required"
+            return self.state()
+        if self.backoff_until and now < self.backoff_until and not dry_run:
+            return self.state()
+        ordinary_summer = tariff.season == "summer" and tariff.day_kind != "holiday"
+        key = f"{tariff.season}-{'weekly' if ordinary_summer else tariff.day_kind}"
+        if (
+            not dry_run
+            and self.status == "Applied and verified"
+            and self.error is None
+            and key == self.last_profile
+            and self.last_verified
+            and now - self.last_verified < VERIFY_INTERVAL
+        ):
+            self._publish()
+            return self.state()
+        attempted = False
+        writes_before = self._write_attempts
+        try:
+            backend = self._backend()
+            need_weekly = self.baseline is None or key == "summer-weekly"
+            snapshot = await backend.snapshot(weekly=need_weekly)
+            if snapshot["globals"].get(WEEKLY) and not _weekly_complete(snapshot["weekly"]):
+                snapshot = await backend.snapshot(weekly=True)
+            self._validate_clock(snapshot)
+            _safe_baseline(snapshot["globals"])
+            if self.baseline is None:
+                if not snapshot["globals"][WEEKLY] or not _weekly_complete(snapshot["weekly"]):
+                    raise ControlError(
+                        "A complete active summer weekly baseline is required first"
+                    )
+                self.baseline = snapshot
+                try:
+                    await self._save()
+                except ControlError:
+                    self.baseline = None
+                    raise
+            elif snapshot["serial"] != self.baseline["serial"]:
+                raise ControlError("The loaded inverter does not match the private baseline")
+            if key == "summer-weekly":
+                if snapshot["weekly"] != self.baseline["weekly"]:
+                    raise ControlError(
+                        "Native weekly tables changed; review before summer restoration"
+                    )
+                commands = self._baseline_commands()
+                target_weekly = True
+            else:
+                plan = build_profile_plan(
+                    now,
+                    shared=self._shared(),
+                    native_weekly_enabled=bool(snapshot["globals"][WEEKLY]),
+                    weekly_backup_verified=_weekly_complete(self.baseline["weekly"]),
+                    daily_plan_verified=True,
+                    off_peak_power_kw=4,
+                )
+                if not plan.can_apply or plan.desired_profile is None:
+                    raise ControlError("; ".join(plan.reasons))
+                profile = plan.desired_profile
+                commands = _profile_commands(profile)
+                target_weekly = False
+            for command in commands:
+                command.inverse(snapshot["globals"])
+            changes = [x for x in commands if not x.matches(snapshot["globals"])]
+            mode = Command("function", WEEKLY, (WEEKLY,), (target_weekly,))
+            if dry_run:
+                return self._preview(
+                    desired_profile=key,
+                    changes=[x.record() for x in changes],
+                    authority_change=not mode.matches(snapshot["globals"]),
+                )
+            if not changes and mode.matches(snapshot["globals"]):
+                # Keep the last real undo journal useful after routine rechecks.
+                self.post_write_failures, self.retry_exhausted = 0, False
+                self.last_verified, self.last_profile = self._now(), key
+                self.status, self.error, self.backoff_until = (
+                    "Applied and verified",
+                    None,
+                    None,
+                )
+                await self._save()
+                self._publish()
+                return self.state()
+            self.transaction = {
+                "state": "writing",
+                "snapshot": snapshot,
+                "undo": [],
+                "profile": key,
+            }
+            await self._save()
+            for command in changes:
+                attempted = True
+                await self._journaled_write(
+                    backend, command, command.inverse(snapshot["globals"])
+                )
+            readback = await backend.snapshot(weekly=False)
+            self._validate_clock(readback)
+            if any(not x.matches(readback["globals"]) for x in commands):
+                raise ControlError(
+                    "Daily profile readback does not match; authority was not switched"
+                )
+            if not mode.matches(readback["globals"]):
+                attempted = True
+                await self._journaled_write(backend, mode, mode.inverse(snapshot["globals"]))
+            verified = await backend.snapshot(weekly=False)
+            self._validate_clock(verified)
+            if not mode.matches(verified["globals"]) or any(
+                not x.matches(verified["globals"]) for x in commands
+            ):
+                raise ControlError("Final inverter profile verification failed")
+            self.post_write_failures, self.retry_exhausted = 0, False
+            self.transaction["state"] = "verified"
+            self.transaction.pop("pending", None)
+            self.last_verified, self.last_profile = self._now(), key
+            self.status, self.error, self.backoff_until = "Applied and verified", None, None
+            await self._save()
+        except Exception as err:
+            if dry_run:
+                return self._preview(
+                    str(err)
+                    if isinstance(err, ControlError)
+                    else f"Scheduling preview failed ({type(err).__name__})"
+                )
+            post_write_failure = self._write_attempts > writes_before
+            rollback_failed = False
+            if attempted:
+                try:
+                    await self._restore(backend)
+                except Exception:
+                    rollback_failed = True
+                    self.enabled, self.recovery_required = False, True
+                    with suppress(ControlError):
+                        await self._save()
+            if attempted:
+                self.last_verified, self.last_profile = None, None
+            self.status = (
+                "Recovery required"
+                if rollback_failed
+                else "Error; prior settings restored"
+                if attempted
+                else "Blocked"
+            )
+            self.error = (
+                str(err)
+                if isinstance(err, ControlError)
+                else f"Scheduling failed ({type(err).__name__})"
+            )
+            self.backoff_until = now + ERROR_BACKOFF
+            if post_write_failure:
+                self.post_write_failures += 1
+                if self.post_write_failures >= MAX_POST_WRITE_FAILURES and not rollback_failed:
+                    self.enabled, self.retry_exhausted = False, True
+                    self.status = "Automatic retries stopped"
+                try:
+                    await self._save()
+                except ControlError:
+                    self.enabled, self.recovery_required = False, True
+                    self.status = "Recovery required"
+        self._publish()
+        return self.state()
 
     def _baseline_commands(self) -> list[Command]:
         assert self.baseline is not None

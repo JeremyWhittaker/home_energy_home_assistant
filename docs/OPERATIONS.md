@@ -101,13 +101,19 @@ If the master is off and the controller audit still says active for more than on
 The inverter master is separate from the A/C response master. Initial setup
 leaves `switch.home_energy_automatic_inverter_schedule` off. A controller tick
 evaluates the calendar each minute; unchanged profiles receive uncached
-verification every 15 minutes, with five-minute error backoff. No repeated writes
-are sent when actual settings already match.
+verification every 15 minutes, with five-minute error backoff. A blocked/error
+status bypasses the healthy-profile shortcut once backoff permits a fresh read;
+matching settings recover without rewriting. No repeated writes are sent when
+actual settings already match.
 
 Before commissioning, call `home_energy_monitor.apply_inverter_schedule` with
 `dry_run: true` and review the returned desired profile, changed fields and
-authority change. The dry run may preserve the numeric baseline in HA's local
-Store; it does not change the inverter. Then enable the switch and verify
+authority change. Check `preview_ready` and `preview_error`; the returned
+`status`/`error` still describe the operating controller. A failed preview does
+not change its status, backoff, retry budget, verified diagnostics or recovery
+latch. Preview receipt/clock diagnostics remain in the response. The dry run may
+preserve the initial numeric baseline in HA's local Store; it does not change
+the inverter. Then enable the switch and verify
 `sensor.home_energy_inverter_schedule_status`, `sensor.home_energy_srp_period`,
 actual readback, and grid/battery power.
 
@@ -120,8 +126,12 @@ reserve/protection to obtain a desired flow.
 
 A transaction journal records intent before each write and verifies current
 parameters without a cloud cache key. Partial changes trigger bounded rollback.
-Interrupted apply/restore or failed recovery disables the master and reports
-**Recovery required**. `home_energy_monitor.rollback_inverter_schedule` restores
+A true interrupted apply/restore or failure after a rollback write disables
+the master and reports **Recovery required**. A missing journal, changed weekly
+table, identity mismatch or clock refusal before a rollback write reports
+**Rollback blocked** without inventing an interrupted transaction; an already
+interrupted transaction retains its latch even if this attempt stops in
+preflight. `home_energy_monitor.rollback_inverter_schedule` restores
 the last actual change only after checking the original inverter identity and
 weekly-table integrity. Routine no-change verification retains that undo record.
 Turning control off alone leaves the applied schedule active; it is not rollback.
@@ -131,3 +141,71 @@ check HA configuration, restart through the supported Core service, and require
 the same config entry to return loaded with version 0.2.1 and the new switch and
 sensors. Compare file hashes as well as fresh states before claiming deployment.
 Do not use a privileged installer when an owned in-place update is sufficient.
+
+
+### Clock and frame diagnostics
+
+`clock_skew_seconds.HOLD_TIME` is the apparent RTC offset at that response's
+receipt, with the unchanged ±120-second limit. It is not the runtime-frame age.
+`runtime_frame_age_seconds` measures that frame's age at validation, limited to
+0–120 seconds. Future frames are refused even when within two minutes.
+`clock_received_at` and `clock_receipt_age_seconds` identify the acquisition
+receipt for each timestamp; missing, naive, future or older-than-120-second
+receipts block. The private snapshot records a receipt for every global/weekly
+range. Extra bulk-read elapsed time is not counted as RTC drift, but cannot make
+an expired frame or receipt usable. No clock synchronization or larger limit is
+performed. Cloud transport delay still limits conclusions about physical RTC
+drift; source validation is not an independent clock calibration.
+
+### Automatic retry stop and explicit resumption
+
+Read-only prerequisite/verification failures keep the five-minute backoff and do
+not consume the post-write failure budget. Each apply that attempts writes and
+fails increments `post_write_failures`, even after its rollback succeeds. After
+three consecutive such failures with successful rollback, the controller saves
+`retry_exhausted: true`, turns the master off and reports **Automatic retries
+stopped**. It remains stopped after restart. Routine ticks and previews cannot
+resume it. A successful guarded verification/apply resets the series.
+
+Review the error and actual retained settings, repair the external cause, then
+explicitly turn the existing inverter master on to acknowledge and start a new
+guarded series. No new force-clear service exists. This acknowledgment cannot
+clear **Recovery required** after a genuine partial/interrupted write: use a
+successful verified rollback first. A failed rollback remains latched rather
+than consuming three more automatic retries. This source slice does not itself
+add notification automations; the retry stop is exposed through the existing
+status sensor and switch.
+
+### One-step rollback and original summer baseline
+
+The undo journal represents **one last actual controller transaction**. A
+Saturday switch replaces the previous weekday-change journal, so rollback then
+returns to the prior weekday recipe, not necessarily the original summer
+weekly configuration. No-change verification and previews preserve that journal.
+The original complete numeric summer baseline remains a separate private
+backup; it is not a second undo step. Ordinary summer control restores its
+owned fields and original weekly authority only after the saved seven-day table
+still matches. All 392 weekly values must remain intact.
+
+For an operator-directed return to the original weekly configuration outside
+summer, keep automatic control off and use the supported EG4 portal controls
+under a reviewed maintenance plan. First verify the inverter identity and all
+seven native weekly tabs against the preserved baseline. Only if that entire
+table is still the verified original may it be selected as authority; verify
+readback and then restore any controller-owned inactive daily fields from the
+same backup. Do not alter reserve, current limits, calibration, protection,
+backup or export modes. Never reconstruct missing settings from memory, write
+raw registers, or edit Home Assistant's `.storage` to clear a latch.
+
+If a real interrupted transaction is blocked by changed weekly tables or
+identity, preserve the baseline/journal and keep the master off. Repair the
+verified external mismatch through supported vendor configuration, then retry
+the existing rollback and require fresh identity/table/clock/readback success.
+If the correct backup or identity cannot be established, recovery remains
+blocked for operator review; forcing a clear would remove the safety guarantee.
+
+The effective winter-weekend/holiday recipe remains 00–12 and 12–00 at 4 kW,
+PV priority09–15 at12 kW and peak shaving off. Its single pure-policy definition
+is admitted before transport. The 101% stop value is still a device workaround.
+Midnight endpoint, weekend, holiday and switch-back behavior still require
+natural field observations; passing source tests does not establish them.

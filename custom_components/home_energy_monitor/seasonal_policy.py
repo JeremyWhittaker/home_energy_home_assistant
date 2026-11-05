@@ -316,15 +316,15 @@ def desired_daily_profile(
     now: datetime,
     *,
     summer_daily_profile: InverterProfile | None = None,
-    off_peak_power_kw: float = 2,
+    off_peak_power_kw: float = 4,
 ) -> InverterProfile | None:
     """Propose a daily profile, preserving a supplied summer live baseline.
 
     Winter comes from the complete uploaded daily screenshot set. No full
     summer daily baseline was uploaded, so it must be supplied from verified
     live backup instead of inventing a global equivalent of weekly settings.
-    The non-peak target preserves bounded existing daily charge power; its
-    documented 00:00–23:59 full-day intent needs firmware boundary verification.
+    Non-peak days use the approved two-window 4 kW preservation recipe.
+    Firmware behavior at the midnight endpoint still needs field verification.
     """
     tariff = evaluate_tariff(now)
     if not tariff.valid or tariff.season is None or tariff.day_kind is None:
@@ -335,16 +335,12 @@ def desired_daily_profile(
             season=tariff.season,
             day_kind=tariff.day_kind,
             ac_windows=(
-                ChargeWindow(
-                    TimeWindow("00:00", "23:59"),
-                    off_peak_power_kw,
-                    101,
-                    all_day_intent=True,
-                ),
+                ChargeWindow(TimeWindow("00:00", "12:00"), off_peak_power_kw, 101),
+                ChargeWindow(TimeWindow("12:00", "00:00"), off_peak_power_kw, 101),
             ),
-            pv_windows=(),
+            pv_windows=(TimeWindow("09:00", "15:00"),),
             peak_windows=(),
-            pv_priority_enabled=False,
+            pv_priority_enabled=True,
             peak_shaving_enabled=False,
         )
     if tariff.season == "summer":
@@ -448,7 +444,7 @@ def build_profile_plan(
     daily_plan_verified: bool = False,
     summer_daily_profile: InverterProfile | None = None,
     summer_baseline_verified: bool = False,
-    off_peak_power_kw: float = 2,
+    off_peak_power_kw: float = 4,
 ) -> ProfilePlan:
     """Admit a proposed global plan only after shared/authority evidence.
 

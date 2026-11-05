@@ -170,17 +170,26 @@ def test_winter_profile_preserves_full_screenshot_combination() -> None:
         assert not any(x.contains_minute(minute) for x in profile.pv_windows)
 
 
-@pytest.mark.parametrize("stamp", ["2026-11-07T18:00:00", "2026-11-26T18:00:00"])
+@pytest.mark.parametrize(
+    "stamp", ["2026-11-07T18:00:00", "2026-11-26T18:00:00", "2026-07-03T18:00:00"]
+)
 def test_non_peak_day_disables_battery_peak_dispatch_and_preserves_bounded_power(
     stamp: str,
 ) -> None:
-    profile = desired_daily_profile(at(stamp), off_peak_power_kw=2)
+    profile = desired_daily_profile(at(stamp))
     assert profile is not None
     assert not profile.peak_shaving_enabled and profile.peak_windows == ()
-    assert not profile.pv_priority_enabled and profile.pv_windows == ()
-    assert profile.ac_windows[0].all_day_intent
-    assert profile.ac_windows[0].power_kw == 2
-    assert profile.ac_windows[0].stop_soc == 101
+    assert profile.pv_priority_enabled and profile.pv_windows == (TimeWindow("09:00", "15:00"),)
+    assert [
+        (x.window.start, x.window.end, x.power_kw, x.stop_soc) for x in profile.ac_windows
+    ] == [
+        ("00:00", "12:00", 4, 101),
+        ("12:00", "00:00", 4, 101),
+    ]
+    assert all(
+        any(x.window.contains_minute(minute) for x in profile.ac_windows)
+        for minute in range(1440)
+    )
 
 
 def test_weekly_authority_requires_full_backup_and_verified_daily_plan() -> None:

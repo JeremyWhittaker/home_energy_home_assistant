@@ -67,7 +67,7 @@ The response preserves HVAC modes and snapshots each target before changing it. 
 
 ## Automatic inverter scheduling
 
-Version 0.2 adds a separate **Automatic EG4 schedule** switch. It starts off, persists its choice and uses the existing loaded EG4 cloud client; it stores no additional login. The shared SRP calculator must be enabled, recent, consistent with the E-15 calendar and configured for America/Phoenix. Inverter clocks must agree within two minutes.
+Version 0.2 adds a separate **Automatic EG4 schedule** switch. It starts off, persists its choice and uses the existing loaded EG4 cloud client; it stores no additional login. The shared SRP calculator must be enabled, recent, consistent with the E-15 calendar and configured for America/Phoenix. The inverter RTC offset must stay within ±120 seconds of its response receipt. Runtime frames and clock-response receipts must be no older than 120 seconds, with future runtime/receipt timestamps rejected. These are separate readback guards and diagnostics; a recent cloud poll does not prove recent inverter telemetry.
 
 | Calendar | Inverter behavior |
 |---|---|
@@ -75,7 +75,9 @@ Version 0.2 adds a separate **Automatic EG4 schedule** switch. It starts off, pe
 | Summer ordinary weekday/weekend | Restore and preserve the complete verified native weekly summer table, including distinct 2/4 kW weekday and 4 kW weekend charging |
 | Winter weekend; SRP holiday in either season | Explicit daily off-peak preservation with 4 kW charging,09–15 PV priority and peak shaving off |
 
-The uploaded winter 101% charging-stop value is preserved as a device workaround, not physical battery capacity. Reserve, protection, forced export and backup settings are preserved. A complete numeric backup and undo journal are saved locally before changes. The controller programs and reads back daily fields before switching from native weekly authority, then verifies again without using cached acknowledgements. Failures trigger bounded rollback or stop automatic changes with a visible recovery error.
+The uploaded winter 101% charging-stop value is preserved as a device workaround, not physical battery capacity. Reserve, protection, forced export and backup settings are preserved. A complete numeric backup and undo journal are saved locally before changes. The controller programs and reads back daily fields before switching from native weekly authority, then verifies again without using cached acknowledgements. Failures trigger bounded rollback. Three consecutive failures after writes, each with successful rollback, stop automatic retries and turn the master off; reviewing the cause and explicitly re-enabling begins a new guarded series. A failed or interrupted partial rollback instead retains **Recovery required** until a verified recovery succeeds.
+
+A preview returns `preview_ready` and `preview_error` separately from operating status; it preserves status, retry timing and any recovery latch while allowing the first private baseline capture. A blocked controller requires a fresh read before it reports recovery, even inside the normal 15-minute verification interval. The pure approved non-peak recipe and the applied recipe now share the same two 4 kW AC windows (00–12 and 12–00), 09–15 PV priority and disabled peak shaving; this source agreement is not live firmware acceptance.
 
 The dashboard shows current tariff, profile, last verified time and any error. Turning the master off stops further changes but leaves applied settings in the inverter. [Operations](docs/OPERATIONS.md#inverter-schedule-control) describes dry-run and recovery services. Source tests, deployed configuration and observed power flow are separate acceptance steps.
 
