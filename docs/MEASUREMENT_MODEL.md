@@ -62,7 +62,7 @@ conservative minutes = 60 × 95% × energy above reserve
 
 The 15-minute sample window needs at least five valid samples spanning eight minutes and meaningful discharge of at least 0.3 kW. Exact 20% SOC returns zero reserve minutes. The nominal capacity and reserve are configured assumptions, not measured usable capacity.
 
-The conservative shortfall binary still governs the separate HVAC risk response. The reviewed household warning and shortfall headline require valid **central and conservative** estimates both to reach reserve before peak ends. A conservative planning-floor-only shortfall does not warn the household. These source corrections await deployment at the November 5 checkpoint; reserve and import protection are preserved.
+The conservative shortfall binary still governs the separate HVAC risk response. The reviewed household warning and shortfall headline require valid **central and conservative** estimates both to reach reserve before peak ends. A conservative planning-floor-only shortfall does not warn the household. These corrections are installed with 0.2.2 and the reviewed dashboard/alert configuration as of November 5; reserve and import protection are preserved. Natural boundary and failure observations remain separate checks.
 
 ## SRP reconciliation: net energy only
 
