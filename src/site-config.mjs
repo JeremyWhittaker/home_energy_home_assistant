@@ -738,7 +738,7 @@ export function buildAutomations(e) {
         ],
         actions: notifyFamily(
           "Home Energy: sustained peak import",
-          `Whole-property grid import has remained above {{ states('${e.peakImportThreshold}') }} kW for five minutes during the SRP peak window. Current import is {{ (states('${e.gridImportPower}') | float / 1000) | round(1) }} kW; sustained import can increase billed demand.`,
+          `Whole-property grid import has remained above {{ states('${e.peakImportThreshold}') }} kW for five minutes during the SRP peak window. {% set import_power = states('${e.gridImportPower}') %}Current import is {% if is_number(import_power) %}{{ (import_power | float / 1000) | round(1) }} kW{% else %}unavailable{% endif %}; sustained import can increase billed demand.`,
           e.peakImportAlertKey,
         ),
         mode: "single",
