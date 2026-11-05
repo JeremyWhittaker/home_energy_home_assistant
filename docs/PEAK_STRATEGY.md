@@ -1,171 +1,93 @@
-# SRP peak-demand strategy
+# SRP peak and thermostat policy
 
-## Existing schedule source
+## One seasonal calendar
 
-The model reuses the editable, holiday-aware JuiceBox schedule already running in Home Assistant:
+Home Energy reads the existing, holiday-aware JuiceBox SRP schedule. The configured plan is **E-15 Average Demand**. Jeremy reported on November 4, 2026 that he had not changed the account plan; the latest bill has not been independently checked here.
 
-- Profile: **E-15 Average Demand**
-- May–October, Monday–Friday: **2:00 PM–8:00 PM**
-- November–April, Monday–Friday: **5:00 AM–9:00 AM** and **5:00 PM–9:00 PM**
-- Configured holidays are off peak.
-- Start is inclusive and end is exclusive.
-- Invalid configuration fails safe and requires attention.
-
-The dashboard does not duplicate the calendar in hidden hard-coded templates; it reads the established helpers and calculates minutes remaining in the active window.
-
-## Alert policy
-
-### Battery at reserve
-
-Trigger when the EG4 bank reaches the editable reserve, default 20%. The test is inclusive (`<= 20.05`) so the inverter's exact 20% floor is caught. If peak begins while already at reserve, the peak-window transition triggers the same alert.
-
-Because this alert deliberately ignores the peak window, its message has to explain the
-context it fired in, and it distinguishes three:
-
-| Situation | What the message says |
+| Season | Weekday peak hours, Arizona time |
 | --- | --- |
-| `juicebox_srp_on_peak` is on | SRP peak is active, with minutes remaining; the battery may no longer supplement the home |
-| Holidays are exempt and today is an SRP-observed holiday | There is no on-peak period at all today and no demand charge to protect — a note, not a risk |
-| Anything else | SRP peak is not active right now |
+| May–October | 2 PM–8 PM |
+| November–April | 5 AM–9 AM and 5 PM–9 PM |
 
-The middle row exists because of a real false alarm. On Labor Day, 2026-09-07, the JuiceBox
-schedule was entirely correct: the holiday helper turned on at 00:00, `juicebox_srp_on_peak`
-never left `off`, and both peak-gated alerts correctly stayed silent. The battery still
-discharged that evening and hit its 20% floor at 20:01, so this alert fired, as designed --
-but it said the bank had reached reserve *"before the current SRP peak window"*, describing a
-peak that was never going to come. A correct schedule read as a broken one. The wording, not
-the schedule, was the defect.
+Configured weekends and observed holidays are off peak. Starts are inclusive and ends are exclusive. An invalid or unavailable schedule blocks peak response. The shared calculator must be enabled and its last evaluation must be between zero and 180 seconds old; stale or future timestamps block activation and release an owned response. `sensor.home_energy_srp_period` and the existing schedule helpers show the effective period; EV charging, EG4 scheduling, and thermostat policy must agree with that period.
 
-### Battery shortfall forecast
+The former 6–8 PM Home Energy response window is retired. Its two `input_datetime.home_energy_hvac_window_*` helpers retain their IDs and saved values for compatibility, but no longer gate alerts or thermostat changes and are absent from the controls editor. Both winter windows now receive full coverage.
 
-Trigger after the conservative forecast remains in shortfall for two minutes during both an active, valid SRP peak window and the editable Peak Controls window. The message includes minutes to reserve and peak minutes remaining, then states whether automatic response is enabled or still in dry-run mode.
+## EG4 battery schedule
 
-### Live peak import
+The seasonal controller uses supported EG4 controls and verifies settings by reading them back. `sensor.home_energy_inverter_schedule_status` exposes the requested profile, last verification, and any error. The control master starts disabled; a successful service response alone does not prove that settings changed or that the battery physically discharged.
 
-Trigger after the whole-property EG4 CT reports import at or above the editable threshold, default 5 kW, continuously for five minutes during both an active, valid SRP peak window and the editable Peak Controls window. This is a live demand-risk signal; the SRP billed-demand sensor is delayed context only.
+The intended behavior is battery discharge during the applicable SRP peak windows, with off-peak self-consumption prevented by the commissioned EG4 settings. Calendar exceptions, reserve limits, unavailable telemetry, and failed readback require explicit controller status. The commissioned reserve is 20%; battery management can prevent discharge even while the schedule permits it.
 
-Each alert writes a peak-window event key to a restored `input_text` helper. State transitions provide prompt delivery, while five-minute reconciliation triggers recover safely after Home Assistant or automation restarts. The persisted key prevents minute-by-minute repeats within the same AM/PM peak window. Alerts use both a persistent notification and the existing family notification script.
+After a settings change, verify fresh battery power and utility-boundary grid power through the next complete peak transition. Positive Home Energy battery power means discharge; negative means charging. Positive grid power means SRP import; negative means export. Keep daily meter comparison separate from schedule readback.
 
-The exact reserve-floor alert remains independent of the narrower Peak Controls window because reaching the inverter's 20% floor before peak is still useful warning information. On a day with no peak at all it is still worth sending -- an empty bank is worth knowing about for backup reasons alone -- but it must say so plainly rather than implying a demand risk that cannot exist.
+## Alerts
 
-### Nothing here schedules the battery
+| Alert | Trigger |
+| --- | --- |
+| Battery at reserve | At or below the configured reserve, or peak begins while already at reserve |
+| Battery may not last through peak | Conservative forecast remains short of the active peak end for two minutes |
+| Sustained peak import | Fresh whole-service CT import remains above the configured threshold for five minutes |
 
-Worth stating because it is easy to assume otherwise: this project reads the EG4 and never
-commands it. No automation writes to any `18kpv` entity. The inverter self-consumes on its own
-logic, so the bank discharges any evening that load exceeds solar -- weekday, weekend or
-observed holiday alike. The SRP schedule decides when *alerts and the A/C response* may act; it
-does not, and cannot, decide when the battery discharges. Holding charge on off-peak days would
-be a new capability against the inverter's own controls, not a schedule fix.
+The last two require an active, valid SRP peak. Reserve alerts also run off peak because an empty battery matters for backup; their message distinguishes active peak, an exempt holiday, and ordinary off peak. The saved local-date AM/PM key prevents repeated alerts within the same period and survives automation reloads. Notifications use Home Assistant and the existing family notification script.
 
-## Peak Controls
+The discharge forecast needs at least five fresh samples spanning eight minutes. It remains unavailable during charging, stale telemetry, or insufficient history. The planning capacity is 28 kWh nominal; energy above reserve and minutes remaining are estimates.
 
-Configure the policy at `/home-energy/peak-controls`. The SRP schedule remains the tariff authority; the editable control window narrows when alerts and A/C response may run. The effective period is therefore the intersection of the two. This prevents a user-entered time from turning an off-peak period into peak.
+## Occupied-home cooling risk response
 
-| Setting | Default | Meaning |
-| --- | ---: | --- |
-| Automatic A/C response | Off | Master permission for thermostat changes; alerts still run when off |
-| Alert/response start | 6:00 PM | Start-inclusive local Arizona time |
-| Alert/response end | 8:00 PM | End-exclusive alert/response window and release boundary |
-| Forecast SOC guardrail | 25% | Forecast response cannot act above this SOC |
-| Cooling setpoint increase | +2°F | Amount added to each selected zone's current target |
-| Zone enabled | On for all three | Per-zone opt-in |
-| Zone maximum | 80°F | Per-zone comfort ceiling |
-| Restore still-owned targets | On | Restore only a target the controller still owns |
-| Sustained import threshold | 5 kW | Existing editable EG4 whole-property import threshold |
+The response is an extra reduction in cooling demand when peak risk is observed. The separate comfort scheduler owns normal seasonal targets, bedtime, arrival, and away behavior, including winter heating setbacks.
 
-### Activation rule
+| Setting | Default |
+| --- | --- |
+| Automatic cooling response | Disabled until enabled explicitly |
+| Timing | Every active SRP peak window |
+| Required presence | `group.family_presence` must be `home` |
+| Forecast SOC guardrail | 25% |
+| Cooling target increase | Up to 2°F |
+| Zone participation | All three selected |
+| Zone comfort ceiling | 80°F |
+| Restore still-owned targets | Enabled |
+| Sustained grid-import threshold | 5 kW |
 
-The controller evaluates once per minute and can activate only once per local date/window:
+The controller acts once per local AM/PM peak when all of these hold:
 
 ```text
-master enabled
-AND SRP schedule valid
-AND SRP peak active
-AND inside configured control window
-AND an eligible selected zone exists
-AND not already handled this window
+response enabled
+AND family home
+AND SRP schedule valid and peak active
+AND more than one peak minute remains
+AND an eligible cooling zone exists
+AND this AM/PM period has not already responded
 AND (
-  forecast shortfall AND SOC <= guardrail
-  OR EG4 import risk has remained active for 5 minutes
+  forecast shortfall AND battery charge <= guardrail
+  OR grid-import risk has persisted for five minutes
 )
 ```
 
-For an eligible zone:
+The family-home and schedule conditions are checked again immediately before each thermostat call. A zone must already be cooling and have numeric targets. Its new target is the smallest of its original target plus the increase, its configured comfort ceiling, and its thermostat limit. This response does not switch modes, start equipment, or lower a cooling target.
 
-```text
-new target = min(original target + increase, zone maximum, thermostat maximum)
-```
+A low SOC guardrail can delay action even when the forecast already predicts a shortfall. Historical evidence from September 3, 2026 showed the forecast warning at about 60% charge but the 25% guardrail allowing only about seven minutes of response before peak ended. The guardrail remains editable; do not interpret it as a prediction of how long the battery will last.
 
-Only a climate already in `cool` mode with numeric targets is eligible. Peak Controls never starts or stops equipment, changes HVAC mode, changes a fan, or lowers a cooling target.
+## Ownership and handoff
 
-### How the SOC guardrail interacts with discharge rate
+Before changing a zone, the controller saves its original and intended targets and records ownership. Calls are staggered by two seconds. A person or another automation changing a target releases that zone, so later restoration cannot undo the new setting.
 
-The forecast branch is `forecast shortfall AND SOC <= guardrail`. The forecast is the
-intelligent half: it predicts reserve before peak ends. The guardrail is only a brake, meant
-to stop the controller acting while the bank is obviously fine. On a night when the bank
-discharges quickly the brake becomes the binding constraint, because SOC crosses a low
-guardrail with very little of the window left.
+Family departure, disabled response, invalid schedule, actual peak end, or its final minute starts release. A ten-second grace period lets an issued thermostat call settle. Restoration runs only when enabled and the current target still equals the controller's applied target. Zone ownership is then cleared, and only after that does the controller report inactive. The override guard skips this release sequence.
 
-Measured on 2026-09-03, a weekday summer peak with the control window at 18:00-20:00:
-
-| Time (MST) | SOC | What happened |
-| --- | ---: | --- |
-| 18:00 | ~79% | Control window opens |
-| 19:02 | 60% | Forecast shortfall alert fired |
-| 19:16 | 50% | |
-| 19:30 | 40% | |
-| 19:44 | 30% | |
-| 19:52 | 24% | First minute SOC is at or below the 25% guardrail |
-| 20:00 | 20% | Reserve reached; SRP peak and control window both end |
-
-The bank fell from about 79% to 20% in two hours, roughly 30 points per hour. The forecast
-knew at 19:02. The 25% guardrail withheld permission until 19:52, and the response refuses to
-act inside the final 60 seconds of the window, so the usable action was about seven minutes
-before release and restoration at 20:00.
-
-Read the guardrail as "how much runway do I want the response to have". At the observed
-discharge rate each guardrail point is worth roughly two minutes of action:
-
-| Guardrail | Would have acted | Action before release |
-| ---: | --- | ---: |
-| 60% | 19:02 | ~57 min |
-| 50% | 19:16 | ~44 min |
-| 40% | 19:30 | ~29 min |
-| 25% | 19:52 | ~7 min |
-
-The guardrail remains at the commissioned 25% by explicit choice. Raising it does not make the
-controller more eager on a healthy night, because the forecast must independently be in
-shortfall; it only widens how early the forecast is allowed to act once it is. Revisit this
-after a few live events, comparing the billed demand figure on nights it acted against nights
-it did not.
-
-### Ownership and restoration
-
-Before each service call, the controller stores the original and intended target and marks only that zone as owned. Thermostats are staggered by two seconds.
-
-- A later manual or scheduled change to a different target releases that zone.
-- A released zone is never overwritten or restored by Peak Controls.
-- Master disable, the final minute before configured-window end, actual SRP peak end, or an invalid schedule releases the controller. The response automation is restart-cancelled by those state changes. Release retains ownership for a ten-second grace period so an already-issued thermostat call or external override can settle, then marks the controller inactive and restores only matching targets. The normal periodic pass starts within the final 60 seconds so restoration completes before an exact-end schedule routine can take authority.
-- Restoration runs only when enabled and only if the current target still exactly matches the controller-applied target.
-- The event key persists across automation reloads, preventing repeated setpoint increases in the same window.
-- An interrupted or failed service is reconciled before the status reports the response as fully active.
-
-### Existing climate routines
-
-Three climate entities are in scope:
+The comfort scheduler waits for that inactive signal before applying arrival, away, or peak-end targets. Its wait must be bounded and must not overwrite a still-owned target if release fails. Existing numeric automation IDs and these thermostat entities remain unchanged:
 
 - Downstairs: `climate.east_ac_down`
 - Primary bedroom: `climate.west_ac_down`
 - Upstairs: `climate.upstairs_ac`
 
-Existing automations adjust these systems at 6 PM, 8 PM, and 9 PM. Peak Controls does not disable or edit those routines. Their later target change is treated as authoritative: the affected zone is released and Peak Controls will not restore over it.
+## Reading the energy diagram
 
-Before turning on the master, review:
+EG4 panels all have Tigo optimizers. Tigo observes the same DC production and is never added to EG4 production. The Enphase microinverter array is separate and reports AC power through the local Envoy. A mixed EG4 DC plus Enphase AC total is labeled estimated.
 
-1. The start/end times for the current SRP season.
-2. Which zones may participate.
-3. The common increase and each zone's maximum comfort temperature.
-4. Whether conditional restoration should remain enabled.
-5. The live EG4 import threshold and battery planning inputs on Peak Strategy.
+The diagram shows EG4 backup loads before the shared main-panel connection. Their separate power is unavailable because neither branch has an independent submeter. Whole-home load is derived from inverter AC, Enphase AC, signed grid power, and rectifier demand. EG4's calculated consumption supplies an internal consistency identity, not independent proof of the load estimate or utility-meter calibration.
 
-Leave the master off to use the same dashboard and alerts as a dry run without any thermostat service calls.
+Grid CTs are on the whole SRP service. Daily comparison requires 24 distinct valid hours from both SRP and the EG4 import/export counters. The default engineering tolerance is the larger of 1 kWh or 2% of absolute net energy. Gross-throughput and net residual percentages are reported separately; large simultaneous import/export must not conceal a net discrepancy.
+
+The November 2–3 difference remains unresolved. Historical analysis localized most of the daily difference to the 10 PM Arizona interval, but did not establish a counter reset or a utility error. The November 3 +8.5 kWh difference is outside the new default tolerance.
+
+Local Envoy is authoritative for Enphase production and cumulative history. Cloud power is optional, explicitly estimated, and disabled by default until whole-array equivalence is verified. It cannot replace lifetime energy counters. Tigo comparisons expire with their cloud sample and expose both timestamps and the allowed three-minute alignment skew.

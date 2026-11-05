@@ -16,6 +16,10 @@ const ALLOWED_TYPES = new Set([
   "entities",
   "entity",
   "entity-filter",
+  "picture-elements",
+  "state-label",
+  "icon",
+  "conditional",
 ]);
 const ENTITY_REFERENCE_PATTERN = /\b[a-z_][a-z0-9_]*\.[a-z0-9_]+\b/g;
 const WRITE_ACTIONS = new Set(["call-service", "perform-action", "toggle", "navigate"]);

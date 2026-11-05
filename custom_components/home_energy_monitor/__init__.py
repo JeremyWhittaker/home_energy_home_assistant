@@ -11,6 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from .const import DOMAIN, PLATFORMS
 from .coordinator import HomeEnergyCoordinator
 from .discovery import SourceDiscoveryError, discover_sources
+from .energy_control import async_setup_energy_control
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -23,8 +24,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = HomeEnergyCoordinator(hass, entry, sources)
     await coordinator.async_config_entry_first_refresh()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    coordinator.energy_control = await async_setup_energy_control(hass, entry, coordinator)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        await coordinator.energy_control.async_shutdown()
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        raise
     return True
 
 
@@ -32,7 +39,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+        coordinator = hass.data[DOMAIN].pop(entry.entry_id, None)
+        if coordinator is not None and getattr(coordinator, "energy_control", None):
+            await coordinator.energy_control.async_shutdown()
     return unloaded
 
 

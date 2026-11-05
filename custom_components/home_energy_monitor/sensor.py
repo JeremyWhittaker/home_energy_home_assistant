@@ -132,6 +132,19 @@ def _tigo_comparison_attrs(snapshot: HomeEnergySnapshot) -> dict[str, Any]:
     }
 
 
+def _solar_attrs(snapshot: HomeEnergySnapshot) -> dict[str, Any]:
+    combined = snapshot.calculation.combined_solar_power_w
+    enphase = snapshot.enphase_power_w
+    return {
+        **_enphase_attrs(snapshot),
+        "eg4_pv_power_w": (
+            round(combined - enphase, 1)
+            if combined is not None and enphase is not None
+            else None
+        ),
+    }
+
+
 SENSORS: tuple[HomeEnergySensorDescription, ...] = (
     HomeEnergySensorDescription(
         key="combined_solar_power",
@@ -144,7 +157,7 @@ SENSORS: tuple[HomeEnergySensorDescription, ...] = (
         classification="Estimated",
         formula="EG4 PV DC + selected Enphase AC power; mixed basis; Tigo excluded",
         value_fn=lambda s: s.calculation.combined_solar_power_w,
-        attrs_fn=_enphase_attrs,
+        attrs_fn=_solar_attrs,
     ),
     HomeEnergySensorDescription(
         key="combined_ac_supply_power",
@@ -520,6 +533,10 @@ async def async_setup_entry(
     async_add_entities(
         HomeEnergySensor(coordinator, entry, description) for description in SENSORS
     )
+    if vars(coordinator).get("energy_control") is not None:
+        from .energy_control import build_control_sensors  # noqa: PLC0415
+
+        async_add_entities(build_control_sensors(coordinator))
 
 
 class HomeEnergySensor(CoordinatorEntity[HomeEnergyCoordinator], SensorEntity):

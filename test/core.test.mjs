@@ -49,6 +49,11 @@ function fixture() {
   for (const entityId of Object.values(discoveryContract.static)) {
     states.push({ entity_id: entityId, state: "off", attributes: {} });
   }
+  states.push(
+    { entity_id: "sensor.home_energy_inverter_schedule_status", state: "disabled", attributes: {} },
+    { entity_id: "sensor.home_energy_srp_period", state: "off_peak", attributes: {} },
+    { entity_id: "group.family_presence", state: "home", attributes: {} },
+  );
   return { entities: registry, states };
 }
 
@@ -88,6 +93,10 @@ test("dashboard is native, responsive, guarded, and complete", () => {
   assert.ok(result.references.length >= 65);
   assert.equal(stableString(dashboard).includes("custom:"), false);
   assert.equal(stableString(dashboard).includes("climate.set_temperature"), false);
+  for (const card of dashboard.views.flatMap((view) => view.sections)
+    .flatMap((section) => section.cards).filter((card) => card.type === "entities")) {
+    assert.equal(card.grid_options?.rows, undefined, "entity inputs must grow without nested clipping");
+  }
   const editableRows = dashboard.views
     .flatMap((view) => view.sections ?? [])
     .flatMap((section) => section.cards ?? [])
@@ -115,6 +124,74 @@ test("dashboard validation rejects missing entities and write actions", () => {
   );
   dashboard.views[0].sections[0].cards.push({ type: "tile", entity: missing, tap_action: { action: "perform-action" } });
   assert.throws(() => validateDashboard(dashboard, data.states), /write\/navigation action/);
+});
+
+
+test("live flow uses reported power directions and leaves panel branches unmetered", () => {
+  const data = fixture();
+  const dashboard = buildDashboard(discoverHomeEnergy(data));
+  const flow = dashboard.views[0].sections[0].cards.find((card) => card.type === "picture-elements");
+  assert.ok(flow);
+  const svg = Buffer.from(flow.image.split(",")[1], "base64").toString("utf8");
+  assert.match(svg, /Backup loads/);
+  assert.match(svg, /Main-panel loads/);
+  assert.equal((svg.match(/Unmetered/g) ?? []).length, 2);
+  assert.equal(flow.elements.filter((element) => element.type === "conditional").length, 4);
+  const directions = flow.elements.filter((element) => element.type === "conditional");
+  for (const direction of directions) {
+    assert.equal(direction.conditions[0].condition, "numeric_state");
+    assert.ok(direction.conditions[0].above === 50 || direction.conditions[0].below === -50);
+    assert.equal(direction.elements[0].tap_action.action, "none");
+  }
+  const serialized = stableString(dashboard);
+  assert.doesNotMatch(serialized, /Tigo observes only part|Tigo diagnostic subset|commissioned tolerance/);
+  assert.match(serialized, /cloud scope remains unverified/);
+});
+
+test("native flow validation still blocks custom cards and write actions inside elements", () => {
+  const data = fixture();
+  const dashboard = buildDashboard(discoverHomeEnergy(data));
+  const flow = dashboard.views[0].sections[0].cards.find((card) => card.type === "picture-elements");
+  flow.elements[0].tap_action = { action: "perform-action" };
+  assert.throws(() => validateDashboard(dashboard, data.states), /write\/navigation action/);
+  flow.elements[0].tap_action = { action: "none" };
+  flow.elements.push({ type: "custom:unsafe-flow" });
+  assert.throws(() => validateDashboard(dashboard, data.states), /unsupported card/);
+});
+
+test("SRP peaks govern risk alerts and occupied-home cooling response", () => {
+  const e = discoverHomeEnergy(fixture()).entities;
+  const automations = buildAutomations(e);
+  const response = automations.find((item) => item.id === "home_energy_peak_hvac_response").config;
+  const release = automations.find((item) => item.id === "home_energy_peak_hvac_release").config;
+  const override = automations.find((item) => item.id === "home_energy_peak_hvac_override_guard").config;
+  const activation = response.actions[0].choose[0];
+  assert.ok(activation.conditions.some((condition) => condition.entity_id === "group.family_presence"
+    && condition.state === "home"));
+  const writes = activation.sequence.filter((action) => action.choose?.[0]?.sequence
+    ?.some((step) => step.action === "climate.set_temperature"));
+  for (const zone of writes) {
+    const steps = zone.choose[0].sequence;
+    const writeIndex = steps.findIndex((step) => step.action === "climate.set_temperature");
+    assert.ok(steps.slice(0, writeIndex).some((step) => step.entity_id === "group.family_presence"
+      && step.state === "home"));
+  }
+  assert.ok(response.triggers.some((trigger) => trigger.entity_id?.includes("group.family_presence")));
+  assert.ok(release.triggers.some((trigger) => trigger.entity_id === "group.family_presence"));
+  assert.match(stableString(release.conditions), /not is_state\('group.family_presence', 'home'\)/);
+  assert.match(stableString(override.conditions), /startswith\('Releasing'\)/);
+  assert.match(response.variables.event_key, /'-am'.*'-pm'/);
+  assert.match(stableString(activation.conditions), /0 <= age <= 180/);
+  assert.match(stableString(activation.conditions), /juicebox_srp_schedule_enabled/);
+  assert.match(stableString(activation.conditions), /juicebox_apply_local_charge_policy/);
+  assert.match(stableString(release.conditions), /not \(is_state/);
+  assert.match(stableString(release.conditions), /0 <= age <= 180/);
+  for (const item of automations) {
+    assert.doesNotMatch(stableString(item.config), /input_datetime\.home_energy_hvac_window_(start|end)/);
+  }
+  const dashboard = buildDashboard({ entities: e });
+  const controls = dashboard.views.find((view) => view.path === "peak-controls");
+  assert.doesNotMatch(stableString(controls), /input_datetime\.home_energy_hvac_window_(start|end)/);
 });
 
 test("the reserve alert never implies a peak on a day that has none", () => {
@@ -191,7 +268,7 @@ test("alert and HVAC automations are windowed, one-shot, and mode safe", () => {
     assert.ok(sequence.slice(ownedIndex + 1, climateIndex).some((step) => step.condition === "template"
       && step.value_template.includes("current - (previous | float)")));
     assert.ok(sequence.slice(ownedIndex + 1, climateIndex).some((step) => step.condition === "template"
-      && step.value_template.includes("as_timestamp(window_end) - as_timestamp(now()) > 60")));
+      && step.value_template.includes("seconds_left > 60")));
   }
   const finalizer = activation.sequence.at(-1);
   const partialFallback = finalizer.default[0];
@@ -201,8 +278,16 @@ test("alert and HVAC automations are windowed, one-shot, and mode safe", () => {
 
   const release = automations.find((automation) => automation.id === "home_energy_peak_hvac_release").config;
   assert.equal(release.actions[1].delay, "00:00:10");
-  assert.equal(release.actions[2].action, "input_boolean.turn_off");
-  assert.equal(release.actions[2].target.entity_id, discoverHomeEnergy(fixture()).entities.hvacControllerActive);
+  const inactiveIndex = release.actions.findIndex((action) => action.action === "input_boolean.turn_off"
+    && action.target?.entity_id === discoverHomeEnergy(fixture()).entities.hvacControllerActive);
+  const restorations = release.actions.flatMap((action, index) => action.choose?.[0]?.sequence
+    ?.some((step) => step.action === "climate.set_temperature") ? [index] : []);
+  assert.equal(restorations.length, 3);
+  assert.ok(restorations.every((index) => index < inactiveIndex));
+  const clearedZones = release.actions.flatMap((action, index) => action.action === "input_boolean.turn_off"
+    && action.target?.entity_id !== discoverHomeEnergy(fixture()).entities.hvacControllerActive ? [index] : []);
+  assert.equal(clearedZones.length, 3);
+  assert.ok(clearedZones.every((index) => index < inactiveIndex));
   assert.ok(release.triggers.some((trigger) => trigger.platform === "time_pattern" && trigger.seconds === "15"));
   const override = automations.find((automation) => automation.id === "home_energy_peak_hvac_override_guard").config;
   assert.ok(override.triggers.some((trigger) => trigger.platform === "time_pattern" && trigger.seconds === "40"));

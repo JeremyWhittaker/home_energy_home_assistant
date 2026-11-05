@@ -49,37 +49,111 @@ function sectionsView({ title, path, icon, badges = [], sections }) {
     max_columns: 2,
     dense_section_placement: true,
     badges,
-    sections,
+    sections: sections.map((section) => ({
+      ...section,
+      cards: section.cards.map((card) => {
+        if (card.type !== "entities" || !card.grid_options?.rows) return card;
+        // Let entity rows grow with mobile inputs instead of trapping controls
+        // inside a second, clipped scrolling area.
+        const { rows: _rows, ...gridOptions } = card.grid_options;
+        return { ...card, grid_options: gridOptions };
+      }),
+    })),
   };
 }
 
 function wholeHomeNarrative(e) {
-  return `{% set bad = ['unknown', 'unavailable', 'none', ''] %}
-{% set valid = is_state('${e.measurementModelValid}', 'on') %}
-{% set healthy = is_state('${e.telemetryHealthy}', 'on') %}
-{% if not healthy or not valid %}
-## ⚠️ Whole-home estimate unavailable
-The model has failed closed instead of showing a misleading zero. **Source health:** {{ states('${e.sourceHealth}') }}. Open **Diagnostics** for the exact issue.
+  return `{% set load = states('${e.wholeHomeLoad}') %}
+{% set grid = states('${e.gridNetPower}') %}
+{% set battery = states('${e.batteryNetPower}') %}
+{% if not is_state('${e.measurementModelValid}', 'on') or not is_number(load) %}
+**Whole-home load is unavailable.** A required source is missing, stale, or inconsistent. The separate grid and battery readings remain useful when their own feeds are fresh. See **Diagnostics**.
 {% else %}
-{% set solar = states('${e.combinedSolarPower}') | float %}
-{% set load = states('${e.wholeHomeLoad}') | float %}
-{% set grid = states('${e.gridNetPower}') | float %}
-{% set battery = states('${e.batteryNetPower}') | float %}
-## {% if grid < -50 %}☀️ Solar surplus{% elif grid > 50 %}🏠 Supplying the home{% else %}⚖️ Grid neutral{% endif %}
-The two arrays are supplying **{{ (solar / 1000) | round(1) }} kW** and the whole property is using **{{ (load / 1000) | round(1) }} kW**.
+The home is using **{{ ((load | float) / 1000) | round(1) }} kW**, including the EG4 backup circuits and main-panel circuits.
 
-{% if grid > 50 %}Importing **{{ (grid / 1000) | round(1) }} kW** from SRP.{% elif grid < -50 %}Exporting **{{ ((grid | abs) / 1000) | round(1) }} kW** to SRP.{% else %}Grid exchange is effectively neutral.{% endif %} {% if battery > 50 %}The battery is discharging **{{ (battery / 1000) | round(1) }} kW**.{% elif battery < -50 %}The battery is charging **{{ ((battery | abs) / 1000) | round(1) }} kW**.{% else %}The battery is standing by.{% endif %}
+{% if is_number(grid) %}{% if grid | float > 50 %}SRP is supplying **{{ ((grid | float) / 1000) | round(1) }} kW**.{% elif grid | float < -50 %}The property is exporting **{{ ((grid | float | abs) / 1000) | round(1) }} kW** to SRP.{% else %}Grid exchange is near zero.{% endif %}{% endif %} {% if is_number(battery) %}{% if battery | float > 50 %}The battery is discharging **{{ ((battery | float) / 1000) | round(1) }} kW**.{% elif battery | float < -50 %}The battery is charging **{{ ((battery | float | abs) / 1000) | round(1) }} kW**.{% else %}The battery is standing by.{% endif %}{% endif %}
+{% if state_attr('${e.wholeHomeLoad}', 'enphase_cloud_fallback') %}
+**Estimate:** local Envoy is unavailable; this calculation uses a delayed Enphase cloud sample.
+{% endif %}
 {% endif %}`;
 }
 
-function solarNarrative(e) {
-  return `## Two independent solar arrays
+function solarNarrative(_e) {
+  return `**Two separate arrays.** EG4 reports panel-side DC power; the local Envoy reports the Enphase array's AC power. Their sum is a solar estimate because inverter conversion losses have not been removed.
 
-**EG4** is the inverter/string array with Tigo optimizers on its panels. **Enphase** is a separate 14-microinverter array. Their AC outputs meet before the SRP meter.
+**Every EG4 panel has a Tigo optimizer.** Tigo measures the same panels and is a diagnostic comparison, never extra production. C4 is the known module outage.
 
-The headline combined value is labeled **Estimated** because EG4 reports array-side DC while the Envoy reports Enphase AC. Tigo observes only part of the EG4 array and is never added to production.
+EG4 also supplies its own backup loads before power reaches the main panel. The utility CTs measure the complete property's net import or export.`;
+}
 
-[Open EG4 equipment](/eg4-energy/live) · [Open Enphase](/enphase-2103/overview) · [Open Tigo modules](/tigo-energy/overview)`;
+function liveFlow(e) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 650">
+<rect width="800" height="650" rx="24" fill="#101b2c"/>
+<g fill="none" stroke="#42546d" stroke-width="5" stroke-linejoin="round">
+<path d="M130 114V150H360V188"/><path d="M220 248H300"/>
+<path d="M500 248H580"/><path d="M400 306V430"/>
+<path d="M670 114H790V430H400"/>
+<path d="M220 430H400V530"/>
+</g>
+<g stroke-width="2">
+<rect x="20" y="24" width="220" height="90" rx="16" fill="#28301e" stroke="#b29442"/>
+<rect x="560" y="24" width="220" height="90" rx="16" fill="#142d41" stroke="#3986aa"/>
+<rect x="300" y="188" width="200" height="118" rx="16" fill="#24344a" stroke="#8199b7"/>
+<rect x="20" y="196" width="200" height="110" rx="16" fill="#20372f" stroke="#48a88b"/>
+<rect x="580" y="196" width="200" height="110" rx="16" fill="#253044" stroke="#667d9a"/>
+<rect x="20" y="378" width="200" height="110" rx="16" fill="#2c2843" stroke="#9a86c8"/>
+<rect x="300" y="530" width="200" height="96" rx="16" fill="#253044" stroke="#667d9a"/>
+</g>
+<g fill="#edf3fc" text-anchor="middle" font-family="Arial,sans-serif" font-size="25">
+<text x="130" y="55">EG4 panels · DC</text><text x="670" y="55">Enphase array · AC</text>
+<text x="400" y="231">EG4 inverter</text><text x="400" y="272" font-size="22">Solar + battery</text>
+<text x="120" y="226">Battery</text><text x="680" y="231">Backup loads</text>
+<text x="680" y="271" fill="#aebed3" font-size="23">Unmetered</text>
+<text x="120" y="411">SRP meter / CT</text>
+<text x="400" y="565">Main-panel loads</text><text x="400" y="602" fill="#aebed3" font-size="23">Unmetered</text>
+<text x="478" y="463" fill="#aebed3" font-size="22">Shared AC connection</text>
+</g></svg>`;
+  function label(entity, left, top, extra = {}) {
+    return {
+      type: "state-label", entity,
+      style: { left: `${left}%`, top: `${top}%`, color: "#ffffff", "font-size": "clamp(11px, 1.1vw, 17px)", "font-weight": "600" },
+      ...extra, ...noActions(),
+    };
+  }
+  function arrow(entity, direction, left, top, above, below, color) {
+    return {
+      type: "conditional",
+      conditions: [{ condition: "numeric_state", entity, ...(above != null ? { above } : {}), ...(below != null ? { below } : {}) }],
+      elements: [{ type: "icon", icon: `mdi:arrow-${direction}-bold`, style: { left: `${left}%`, top: `${top}%`, color, "--mdc-icon-size": "28px" }, ...noActions() }],
+    };
+  }
+  return {
+    type: "picture-elements",
+    image: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+    elements: [
+      label(e.combinedSolarPower, 16.25, 13.5, { attribute: "eg4_pv_power_w", suffix: " W" }),
+      label(e.combinedSolarPower, 83.75, 13.5, { attribute: "enphase_power_w", suffix: " W" }),
+      label(e.batteryNetPower, 15, 40.5),
+      label(e.batterySoc, 15, 44.5, { prefix: "Charge " }),
+      label(e.gridNetPower, 15, 68.5),
+      arrow(e.batteryNetPower, "right", 32.5, 38.2, 50, null, "#67d3a7"),
+      arrow(e.batteryNetPower, "left", 32.5, 38.2, null, -50, "#67d3a7"),
+      arrow(e.gridNetPower, "right", 32.5, 66.15, 50, null, "#c1a7f4"),
+      arrow(e.gridNetPower, "left", 32.5, 66.15, null, -50, "#c1a7f4"),
+    ],
+    grid_options: { columns: "full" },
+  };
+}
+
+function reconciliationNarrative(e) {
+  return `{% set residual = states('${e.gridReconciliationResidual}') %}
+{% if is_number(residual) %}
+**{{ states('${e.gridReconciliationDate}') }}:** EG4 minus SRP is **{{ (residual | float) | round(2) }} kWh**. {{ 'Within' if is_state('${e.gridReconciliationMatches}', 'on') else 'Outside' }} the configured **{{ state_attr('${e.gridReconciliationResidual}', 'tolerance_kwh') }} kWh** tolerance.
+
+Both meters must provide 24 distinct valid hours in Arizona time. The default allowance is the larger of 1 kWh or 2% of net energy. This is an engineering comparison; agreement does not independently prove CT calibration.
+{% else %}
+A complete settled comparison is unavailable. {{ state_attr('${e.gridReconciliationResidual}', 'refresh_error') or 'Waiting for a common day with 24 valid hours from each meter.' }}
+{% endif %}`;
 }
 
 function batteryForecast(e) {
@@ -119,71 +193,62 @@ The battery forecast and EG4 whole-property grid CT are inside their current ale
 }
 
 function climateRecommendation(e) {
-  return `{% set shortfall = is_state('${e.peakForecastShortfall}', 'on') %}
-{% set peak = is_state('${e.peakWindow}', 'on') %}
-## A/C demand strategy
-{% if shortfall and peak %}**Action recommended:** reduce cooling demand now—typically by raising cooling setpoints within your comfort limit—so battery support lasts through the peak window.{% else %}No battery-driven A/C adjustment is currently recommended.{% endif %}
+  return `**Peak cooling response:** {{ 'enabled' if is_state('${e.hvacResponseEnabled}', 'on') else 'disabled' }}. It follows both winter SRP windows and the summer window, and acts only while the family is home.
 
-Peak Controls is **{{ 'enabled' if is_state('${e.hvacResponseEnabled}', 'on') else 'disabled · dry run only' }}**. Configure its 6–8 PM window, 25% SOC guardrail, +2°F response, zone caps, and safe restoration on the **Peak Controls** tab.
+A battery shortfall at or below the SOC guardrail, or five minutes of high grid import, can raise selected cooling targets within their caps. The separate comfort schedule handles seasonal heating/cooling, bedtime, arrival, and away settings.
 
-- **Downstairs:** {{ states('${e.downstairsClimate}') }} · {{ state_attr('${e.downstairsClimate}', 'current_temperature') }}° → {{ state_attr('${e.downstairsClimate}', 'temperature') }}°
-- **Primary bedroom:** {{ states('${e.primaryClimate}') }} · {{ state_attr('${e.primaryClimate}', 'current_temperature') }}° → {{ state_attr('${e.primaryClimate}', 'temperature') }}°
-- **Upstairs:** {{ states('${e.upstairsClimate}') }} · {{ state_attr('${e.upstairsClimate}', 'current_temperature') }}° → {{ state_attr('${e.upstairsClimate}', 'temperature') }}°`;
+- **Downstairs:** {{ state_attr('${e.downstairsClimate}', 'current_temperature') }}° → {{ state_attr('${e.downstairsClimate}', 'temperature') }}°
+- **Primary bedroom:** {{ state_attr('${e.primaryClimate}', 'current_temperature') }}° → {{ state_attr('${e.primaryClimate}', 'temperature') }}°
+- **Upstairs:** {{ state_attr('${e.upstairsClimate}', 'current_temperature') }}° → {{ state_attr('${e.upstairsClimate}', 'temperature') }}°`;
 }
 
 function peakControlsNarrative(e) {
-  return `## {{ '🟠 Controller active' if is_state('${e.hvacControllerActive}', 'on') else '⚪ Controller standing by' }}
+  return `**{{ 'Responding to peak risk' if is_state('${e.hvacControllerActive}', 'on') else 'Standing by' }}** · automatic response {{ 'enabled' if is_state('${e.hvacResponseEnabled}', 'on') else 'disabled' }}
 
-- **Master:** {{ 'enabled' if is_state('${e.hvacResponseEnabled}', 'on') else 'disabled — alerts remain a dry run' }}
-- **Response window:** {{ states('${e.hvacWindowStart}')[0:5] }}–{{ states('${e.hvacWindowEnd}')[0:5] }}
-- **Forecast guardrail:** {{ states('${e.hvacSocGuardrail}') }}% SOC · **setpoint increase:** {{ states('${e.hvacSetpointIncrease}') }}°F
+**Timing:** every valid active SRP peak, including both winter windows. **Forecast guardrail:** {{ states('${e.hvacSocGuardrail}') }}% battery charge. **Cooling increase:** up to {{ states('${e.hvacSetpointIncrease}') }}°F.
 
-{{ states('${e.hvacControllerStatus}') if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] else 'No controller action has been recorded yet.' }}
+{{ states('${e.hvacControllerStatus}') if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] else 'No action recorded.' }}
 
-The rule activates once per window when **(forecast shortfall AND SOC ≤ guardrail) OR sustained EG4 grid import**. SRP must report a valid active peak window. It only raises selected thermostats already in cooling mode; it never changes mode or turns equipment off.`;
+Only occupied-home cooling targets are eligible. This risk response does not change thermostat modes; the comfort schedule handles winter heating setbacks.`;
 }
 
-function peakControlsSafety(e) {
-  return `## Ownership and restoration
+function peakControlsSafety(_e) {
+  return `**Target ownership** prevents the risk response from undoing your changes.
 
-For each selected zone, Peak Controls snapshots the original target and applies:
-
-**new target = min(original + increase, zone cap, thermostat maximum)**
-
-- A manual or scheduled change to a different target immediately releases that zone.
-- Released zones are never restored or overwritten.
-- Just before the configured end time—or at actual peak end, invalid schedule, or master disable—restoration runs only for a still-owned zone whose target exactly matches the value Peak Controls applied.
-- The controller activates at most once per local date/window, including after an automation reload.
-- Existing 6 PM, 8 PM, and 9 PM routines remain authoritative.
-
-The master is deployed **off**. Configure the rules here, review the live values, then enable it when ready.`;
+- Each zone is captured before its target is raised, within the zone and thermostat limits.
+- A manual or scheduled change releases that zone.
+- Leaving home, disabling response, an invalid schedule, or the end of SRP peak releases the response.
+- Restoration changes only a target that still exactly matches the response's applied value.
+- The controller reports inactive after restoration finishes, so the comfort schedule can safely take over.
+- Each winter morning/evening window can respond once. The saved event survives automation reloads.`;
 }
 
 function peakControlsAudit(e) {
-  return `## Controller audit
+  return `**Last action:** {{ states('${e.hvacControllerStatus}') }}
 
-- **Last status:** {{ states('${e.hvacControllerStatus}') if states('${e.hvacControllerStatus}') not in ['unknown', 'unavailable', ''] else 'No action recorded' }}
-- **Last handled window:** {{ states('${e.hvacControllerEventKey}') if states('${e.hvacControllerEventKey}') not in ['unknown', 'unavailable', ''] else 'None' }}
-- **SRP schedule:** {{ 'valid' if is_state('${e.peakScheduleValid}', 'on') else 'invalid or unavailable' }} · {{ 'peak active' if is_state('${e.peakWindow}', 'on') else 'off peak' }}
-- **Owned targets:** downstairs {{ states('${e.hvacEastOwned}') }}, primary bedroom {{ states('${e.hvacWestOwned}') }}, upstairs {{ states('${e.hvacUpstairsOwned}') }}
+**Last handled period:** {{ states('${e.hvacControllerEventKey}') }}
 
-These are internal safety latches and are intentionally read-only on this page.`;
+**Owned targets:** downstairs {{ states('${e.hvacEastOwned}') }}, primary bedroom {{ states('${e.hvacWestOwned}') }}, upstairs {{ states('${e.hvacUpstairsOwned}') }}.
+
+The old 6–8 PM helper values are retained for existing references and no longer control timing.`;
 }
 
 function diagnosticsNarrative(e) {
   return `{% set issues = state_attr('${e.sourceHealth}', 'issues') or [] %}
-## {{ '✅ Measurement model valid' if is_state('${e.measurementModelValid}', 'on') else '⚠️ Measurement model invalid' }}
-- **Source health:** {{ states('${e.sourceHealth}') }}
-- **Calculation:** EG4 AC + Enphase AC + signed grid − EG4 rectifier
-**Cross-check residual:** {{ state_attr('${e.measurementModelValid}', 'balance_residual_w') }} W (allowed {{ state_attr('${e.measurementModelValid}', 'balance_tolerance_w') }} W)
+**Source health:** {{ states('${e.sourceHealth}') }}. **Internal AC-bus consistency:** {{ 'within tolerance' if is_state('${e.measurementModelValid}', 'on') else 'unavailable or outside tolerance' }}.
 
-{% if issues %}### Current issues
-{% for issue in issues %}- {{ issue }}
-{% endfor %}{% else %}No current calculation-source issues.{% endif %}`;
+The consistency equation reuses EG4's calculated consumption; it is not an independent measurement of either panel's load or proof that the utility meter agrees.
+
+{% if issues %}{% for issue in issues %}- {{ issue }}
+{% endfor %}{% else %}No source issues reported.{% endif %}`;
 }
 
 export function buildDashboard(discovery) {
-  const e = discovery.entities;
+  const e = {
+    ...discovery.entities,
+    inverterScheduleStatus: "sensor.home_energy_inverter_schedule_status",
+    srpPeriod: "sensor.home_energy_srp_period",
+  };
   return {
     views: [
       sectionsView({
@@ -201,15 +266,17 @@ export function buildDashboard(discovery) {
           {
             type: "grid",
             cards: [
-              heading("Live whole-property balance", "mdi:chart-sankey-variant"),
+              heading("Live energy flow", "mdi:chart-sankey-variant"),
+              liveFlow(e),
               markdown(wholeHomeNarrative(e)),
+              markdown("Arrows follow fresh signed battery and grid power. Backup loads and main-panel loads are shown in their physical branches; their separate wattages are not measured."),
               heading("Current power", "mdi:flash", "subtitle"),
-              tile(e.combinedSolarPower, "Combined solar · estimated", "mdi:solar-power"),
-              tile(e.wholeHomeLoad, "Whole-home load · derived", "mdi:home-lightning-bolt"),
-              tile(e.gridImportPower, "Grid import · measured CT", "mdi:transmission-tower-import"),
-              tile(e.gridExportPower, "Grid export · measured CT", "mdi:transmission-tower-export"),
-              tile(e.batteryNetPower, "Battery + discharge / − charge", "mdi:battery-sync"),
-              tile(e.batterySoc, "Battery state of charge", "mdi:battery-high"),
+              tile(e.combinedSolarPower, "Solar estimate", "mdi:solar-power"),
+              tile(e.wholeHomeLoad, "Home load", "mdi:home-lightning-bolt"),
+              tile(e.gridImportPower, "Grid import", "mdi:transmission-tower-import"),
+              tile(e.gridExportPower, "Grid export", "mdi:transmission-tower-export"),
+              tile(e.batteryNetPower, "Battery power", "mdi:battery-sync"),
+              tile(e.batterySoc, "Battery charge", "mdi:battery-high"),
             ],
           },
           {
@@ -221,20 +288,20 @@ export function buildDashboard(discovery) {
                 title: "Whole-property power",
                 hours_to_show: 24,
                 entities: [
-                  row(e.combinedSolarPower, "Combined solar · estimated"),
-                  row(e.wholeHomeLoad, "Whole-home load · derived"),
+                  row(e.combinedSolarPower, "Solar estimate"),
+                  row(e.wholeHomeLoad, "Home load"),
                   row(e.gridNetPower, "Grid net · + import / − export"),
                   row(e.batteryNetPower, "Battery · + discharge / − charge"),
                 ],
                 grid_options: { columns: "full", rows: 7 },
               },
-              heading("What is—and is not—known", "mdi:information-outline", "subtitle"),
+              heading("How to read these values", "mdi:information-outline", "subtitle"),
               markdown(`- **Measured:** EG4 whole-property grid CT, battery SOC, source-device telemetry.
 - **Derived:** whole-home load and AC balance.
 - **Estimated:** combined solar mixes EG4 DC and Enphase AC.
 - **Utility settled:** delayed SRP billing data.
 
-The backup-panel and regular-panel loads **cannot be separated** with the installed sensors. A dedicated panel submeter is required; this page never invents that split.`),
+The backup-panel and regular-panel loads **cannot be separated** with the installed sensors. Separate backup-panel and main-panel readings require dedicated submeters.`),
             ],
           },
         ],
@@ -257,7 +324,7 @@ The backup-panel and regular-panel loads **cannot be separated** with the instal
               markdown(solarNarrative(e)),
               {
                 type: "distribution",
-                title: "Current array contribution · mixed DC/AC",
+                title: "Array readings · DC and AC",
                 entities: [
                   { entity: e.eg4PvPower, name: "EG4 array · DC", color: "#f9a825" },
                   { entity: e.enphasePower, name: "Enphase array · AC", color: "#1e88e5" },
@@ -267,6 +334,14 @@ The backup-panel and regular-panel loads **cannot be separated** with the instal
               tile(e.eg4PvPower, "EG4 PV · measured DC", "mdi:solar-panel"),
               tile(e.enphasePower, "Enphase · measured AC", "mdi:solar-panel-large"),
               tile(e.combinedSolarPower, "Combined · estimated", "mdi:solar-power", 12),
+              markdown(`**EG4** · DC input: {{ states('${e.eg4PvPower}') }} {{ state_attr('${e.eg4PvPower}', 'unit_of_measurement') }}. [Inverter and battery detail](/eg4-energy/live).
+
+{% set sample = state_attr('${e.combinedSolarPower}', 'enphase_sample_at') %}
+**Enphase** · {{ state_attr('${e.combinedSolarPower}', 'enphase_power_source') or 'unavailable' }}. Sample {{ as_timestamp(sample) | timestamp_custom('%-I:%M %p') if sample else 'unavailable' }}. Local Envoy is authoritative; cloud scope remains unverified and automatic fallback is disabled by default. Lifetime energy always retains its original local Envoy history. [Microinverter detail](/enphase-2103/overview).
+
+{% set age = state_attr('${e.tigoRatio}', 'sample_age_minutes') %}
+{% set skew = state_attr('${e.tigoRatio}', 'alignment_skew_seconds') %}
+**Tigo** · {{ state_attr('${e.tigoRatio}', 'comparison_reason') or 'Waiting for a fresh sample' }}. Sample age {{ ((age | round(1)) ~ ' min') if age is number else 'unavailable' }}; alignment {{ ((skew | round(0)) ~ ' seconds') if skew is number else 'unavailable' }}. The ratio expires when the cloud sample expires. [Module map](/tigo-energy/overview).`),
             ],
           },
           {
@@ -275,14 +350,14 @@ The backup-panel and regular-panel loads **cannot be separated** with the instal
               heading("Array diagnostics", "mdi:stethoscope"),
               {
                 type: "entities",
-                title: "Health and coverage",
+                title: "Tigo and Enphase health",
                 show_header_toggle: false,
                 state_color: true,
                 entities: [
-                  row(e.tigoModuleProblem, "Tigo module problem · C4 known down"),
+                  row(e.tigoModuleProblem, "Tigo modules · C4 known down"),
                   row(e.tigoArrayPower, "Tigo diagnostic power · not additive"),
                   row(e.tigoAlignedEg4Power, "EG4 power aligned to Tigo sample"),
-                  row(e.tigoRatio, "Tigo / EG4 aligned coverage"),
+                  row(e.tigoRatio, "Tigo / EG4 · time-aligned ratio"),
                   row(e.enphaseSystemProblem, "Enphase system problem"),
                   row(e.enphaseActiveMicroinverters, "Active Enphase microinverters"),
                 ],
@@ -295,7 +370,7 @@ The backup-panel and regular-panel loads **cannot be separated** with the instal
                 entities: [
                   row(e.eg4PvPower, "EG4 array · DC"),
                   row(e.enphasePower, "Enphase array · AC"),
-                  row(e.tigoArrayPower, "Tigo diagnostic subset"),
+                  row(e.tigoArrayPower, "Tigo · same EG4 panels"),
                 ],
                 grid_options: { columns: "full", rows: 6 },
               },
@@ -329,7 +404,7 @@ The backup-panel and regular-panel loads **cannot be separated** with the instal
                 grid_options: { columns: "full", rows: 3 },
               },
               markdown(batteryForecast(e)),
-              tile(e.batteryNetPower, "Battery + discharge / − charge", "mdi:battery-sync"),
+              tile(e.batteryNetPower, "Battery power", "mdi:battery-sync"),
               tile(e.batteryAvailableEnergy, "Energy above reserve · estimated", "mdi:battery-high"),
               tile(e.batteryDischargeAverage, "Discharge average · 15m", "mdi:chart-line"),
               tile(e.batteryDischargeP80, "Discharge p80 · 15m", "mdi:chart-bell-curve-cumulative"),
@@ -363,7 +438,7 @@ The two EG4 batteries provide roughly **28 kWh nominal** and feed the backup pan
         icon: "mdi:transmission-tower",
         badges: [
           badge(e.gridNetPower, "Live grid net", "mdi:transmission-tower"),
-          badge(e.gridReconciliationMatches, "Meter match", "mdi:scale-balance"),
+          badge(e.gridReconciliationMatches, "Meter comparison", "mdi:scale-balance"),
           badge(e.srpIntegrationAvailable, "SRP feed", "mdi:cloud-check-outline"),
           badge(e.srpBilledCyclePeak, "Cycle peak", "mdi:chart-timeline-variant"),
         ],
@@ -372,8 +447,7 @@ The two EG4 batteries provide roughly **28 kWh nominal** and feed the backup pan
             type: "grid",
             cards: [
               heading("Live utility boundary", "mdi:meter-electric-outline"),
-              markdown(`## The grid CT is the live source of truth
-EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and Enphase combine. Positive is import; negative is export. This is the only trustworthy live net measurement for the complete property.`),
+              markdown(`The EG4 current transformers (CTs) are on the incoming SRP service lines. They measure net exchange for both arrays, both panels, and the battery. **Positive = import; negative = export.** Compare their accumulated net energy with SRP settled intervals to check agreement.`),
               tile(e.gridNetPower, "Grid net · + import / − export", "mdi:transmission-tower", 12),
               tile(e.gridImportPower, "Grid import", "mdi:transmission-tower-import"),
               tile(e.gridExportPower, "Grid export", "mdi:transmission-tower-export"),
@@ -393,7 +467,8 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
           {
             type: "grid",
             cards: [
-              heading("Revenue-meter reconciliation", "mdi:scale-balance"),
+              heading("Daily meter comparison", "mdi:scale-balance"),
+              markdown(reconciliationNarrative(e)),
               {
                 type: "entities",
                 title: "Latest common settled day",
@@ -404,7 +479,7 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
                   row(e.srpSettledNetEnergy, "SRP revenue-meter net"),
                   row(e.eg4SameDayNetEnergy, "EG4 CT net"),
                   row(e.gridReconciliationResidual, "EG4 minus SRP residual"),
-                  row(e.gridReconciliationMatches, "Within commissioned tolerance"),
+                  row(e.gridReconciliationMatches, "Within configured tolerance"),
                 ],
                 grid_options: { columns: "full", rows: 5 },
               },
@@ -412,7 +487,7 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
               tile(e.srpCurrentDemand, "Current-cycle demand · delayed", "mdi:gauge"),
               tile(e.srpBilledCyclePeak, "Billed cycle peak · delayed", "mdi:chart-line"),
               tile(e.srpBillProjection, "Bill projection · delayed", "mdi:cash-clock", 12),
-              markdown(`SRP's separate **production** and **usage** channels do not describe this wiring correctly because the arrays, batteries, and backup-panel loads interact behind the revenue meter. Only SRP's signed **net** intervals are used for verification. [Open SRP detail](/srp-energy)`),
+              markdown(`The utility bill is delayed. This comparison uses SRP's signed **net** intervals; the separate production and usage fields are not treated as independent meters for either solar array. [Open SRP detail](/srp-energy)`),
             ],
           },
         ],
@@ -433,6 +508,14 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
             cards: [
               heading("Live peak posture", "mdi:shield-home"),
               markdown(peakNarrative(e)),
+              tile(e.srpPeriod, "Current SRP period", "mdi:calendar-clock", 12),
+              tile(e.inverterScheduleStatus, "EG4 schedule readback", "mdi:calendar-check", 12),
+              markdown(`{% set verified = state_attr('${e.inverterScheduleStatus}', 'last_verified') %}
+**Schedule profile:** {{ state_attr('${e.inverterScheduleStatus}', 'profile') or 'Not verified' }}. **Last verified:** {{ as_timestamp(verified) | timestamp_custom('%b %-d, %-I:%M %p') if verified else 'Not yet verified' }}.
+
+{{ state_attr('${e.inverterScheduleStatus}', 'error') or '' }}
+
+A schedule readback confirms settings. Check the battery and grid graphs to verify actual discharge.`),
               tile(e.peakStrategyStatus, "Peak strategy", "mdi:shield-home-outline", 12),
               tile(e.peakMinutesRemaining, "Minutes left in peak window", "mdi:timer-sand"),
               tile(e.batteryMinutesToReserve, "Conservative minutes to reserve", "mdi:battery-clock-outline"),
@@ -457,7 +540,7 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
             cards: [
               heading("Cooling-load response", "mdi:thermostat"),
               markdown(climateRecommendation(e)),
-              heading("Commissioned thresholds", "mdi:tune-variant", "subtitle"),
+              heading("Planning inputs", "mdi:tune-variant", "subtitle"),
               {
                 type: "entities",
                 title: "Editable helpers",
@@ -494,7 +577,7 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
               heading("Peak demand response", "mdi:thermostat-auto"),
               markdown(peakControlsNarrative(e)),
               tile(e.hvacControllerActive, "Controller ownership", "mdi:shield-lock-outline"),
-              tile(e.batterySoc, "Battery state of charge", "mdi:battery-high"),
+              tile(e.batterySoc, "Battery charge", "mdi:battery-high"),
               tile(e.batteryMinutesToReserve, "Conservative minutes to reserve", "mdi:battery-clock-outline"),
               tile(e.peakMinutesRemaining, "Actual peak minutes remaining", "mdi:timer-sand"),
               tile(e.gridImportPower, "Live EG4 grid import", "mdi:transmission-tower-import"),
@@ -519,30 +602,29 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
               heading("Configure the rule", "mdi:tune-vertical"),
               {
                 type: "entities",
-                title: "Master, timing, and thresholds",
+                title: "Master and thresholds",
                 show_header_toggle: false,
                 state_color: true,
                 entities: [
                   row(e.hvacResponseEnabled, "Enable automatic A/C response"),
-                  row(e.hvacWindowStart, "Alert/response start"),
-                  row(e.hvacWindowEnd, "Alert/response end"),
+
                   row(e.hvacSocGuardrail, "Forecast SOC guardrail"),
                   row(e.hvacSetpointIncrease, "Cooling setpoint increase"),
                   row(e.hvacRestoreEnabled, "Restore still-owned targets"),
-                  row(e.peakImportThreshold, "Sustained import threshold"),
+                  row(e.peakImportThreshold, "Import threshold"),
                 ],
                 grid_options: { columns: "full", rows: 7 },
               },
               {
                 type: "entities",
-                title: "Zone participation and comfort caps",
+                title: "Cooling zones",
                 show_header_toggle: false,
                 state_color: true,
                 entities: [
                   row(e.hvacEastEnabled, "Downstairs enabled"),
                   row(e.hvacEastMaximum, "Downstairs maximum"),
-                  row(e.hvacWestEnabled, "Primary bedroom enabled"),
-                  row(e.hvacWestMaximum, "Primary bedroom maximum"),
+                  row(e.hvacWestEnabled, "Primary enabled"),
+                  row(e.hvacWestMaximum, "Primary maximum"),
                   row(e.hvacUpstairsEnabled, "Upstairs enabled"),
                   row(e.hvacUpstairsMaximum, "Upstairs maximum"),
                 ],
@@ -576,10 +658,10 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
                 show_header_toggle: false,
                 state_color: true,
                 entities: [
-                  row(e.measurementModelValid, "AC-bus equation valid"),
+                  row(e.measurementModelValid, "Internal AC-bus consistency"),
                   row(e.telemetryHealthy, "Required telemetry healthy"),
                   row(e.sourceHealth, "Overall source health"),
-                  row(e.gridReconciliationMatches, "SRP / EG4 daily net match"),
+                  row(e.gridReconciliationMatches, "SRP / EG4 within tolerance"),
                   row(e.srpIntegrationAvailable, "SRP integration available"),
                   row(e.enphaseSystemProblem, "Enphase system problem"),
                   row(e.tigoModuleProblem, "Tigo module problem"),
@@ -611,7 +693,7 @@ EG4's 240 V grid CT sits at the whole-property utility boundary, after EG4 and E
               markdown(`### Live balance
 **Whole-home load** = EG4 AC + Enphase AC + signed grid − rectifier
 
-Equivalent cross-check: EG4 vendor-calculated load + Enphase AC
+Equivalent identity: EG4 vendor-calculated load + Enphase AC. This reuses the same inverter measurements and is not independent calibration.
 
 ### Solar
 **Combined solar estimate** = EG4 PV DC + Enphase AC
@@ -629,7 +711,7 @@ Tigo is excluded because it observes the same EG4 panels.
 Positive means discharge; negative means charge.
 
 ### Daily utility check
-Sum raw SRP hourly net intervals, then compare with EG4 daily import change minus export change.`),
+Require 24 distinct hourly intervals from each source. Sum SRP signed net and compare with EG4 import changes minus export changes. Report the net and gross residual percentages separately.`),
               markdown(`## Equipment pages
 [EG4 solar & battery](/eg4-energy/live) · [Enphase array](/enphase-2103/overview) · [Tigo module map](/tigo-energy/overview) · [SRP billing detail](/srp-energy)`),
             ],

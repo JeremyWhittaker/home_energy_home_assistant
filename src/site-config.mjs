@@ -1,5 +1,7 @@
 import { peakControlDefaults } from "./peak-controls.mjs";
 
+const FAMILY_PRESENCE = "group.family_presence";
+
 export const helperSpecifications = Object.freeze([
   {
     domain: "input_number",
@@ -284,69 +286,46 @@ const notifyFamily = (title, message, latch, alertKey = "{{ alert_key }}") => [
   },
 ];
 
+function sharedPeakExpression(e) {
+  return `is_state('${e.peakScheduleValid}', 'on')
+    and is_state('${e.peakWindow}', 'on')
+    and is_state('input_boolean.juicebox_srp_schedule_enabled', 'on')
+    and is_state('automation.juicebox_apply_local_charge_policy', 'on')
+    and evaluated is number and 0 <= age <= 180`;
+}
+
+function sharedScheduleAgeTemplate() {
+  return `{% set evaluated = as_timestamp(state_attr('automation.juicebox_apply_local_charge_policy', 'last_triggered'), none) %}
+{% set age = as_timestamp(now()) - evaluated if evaluated is number else -1 %}`;
+}
+
 function peakControlWindowTemplate(e) {
-  return `{% set bad = ['unknown', 'unavailable', 'none', ''] %}
-{% set start_text = states('${e.hvacWindowStart}') %}
-{% set end_text = states('${e.hvacWindowEnd}') %}
-{% if start_text in bad or end_text in bad or start_text == end_text %}
-  false
-{% else %}
-  {% set start = today_at(start_text) %}
-  {% set end = today_at(end_text) %}
-  {{ start <= now() < end if start < end else now() >= start or now() < end }}
-{% endif %}`;
+  return `${sharedScheduleAgeTemplate()}
+{{ ${sharedPeakExpression(e)} }}`;
 }
 
 function peakControlOutsideWindowTemplate(e) {
-  return `{% set bad = ['unknown', 'unavailable', 'none', ''] %}
-{% set start_text = states('${e.hvacWindowStart}') %}
-{% set end_text = states('${e.hvacWindowEnd}') %}
-{% if start_text in bad or end_text in bad or start_text == end_text %}
-  true
-{% else %}
-  {% set start = today_at(start_text) %}
-  {% set end = today_at(end_text) %}
-  {{ not (start <= now() < end) if start < end else not (now() >= start or now() < end) }}
-{% endif %}`;
+  return `${sharedScheduleAgeTemplate()}
+{{ not (${sharedPeakExpression(e)})
+    or not is_number(states('${e.peakMinutesRemaining}')) }}`;
 }
 
 function peakControlEndingSoonTemplate(e) {
-  return `{% set bad = ['unknown', 'unavailable', 'none', ''] %}
-{% set start_text = states('${e.hvacWindowStart}') %}
-{% set end_text = states('${e.hvacWindowEnd}') %}
-{% if start_text in bad or end_text in bad or start_text == end_text %}
-  false
-{% else %}
-  {% set start = today_at(start_text) %}
-  {% set end = today_at(end_text) %}
-  {% set in_window = start <= now() < end if start < end else now() >= start or now() < end %}
-  {% set window_end = end + timedelta(days=1) if start > end and now() >= start else end %}
-  {% set seconds_left = as_timestamp(window_end) - as_timestamp(now()) %}
-  {{ in_window and 0 < seconds_left <= 60 }}
-{% endif %}`;
+  return `{% set remaining = states('${e.peakMinutesRemaining}') %}
+{% set seconds_left = (remaining | float(0)) * 60 %}
+{{ is_number(remaining) and 0 < seconds_left <= 60 }}`;
 }
 
 function peakControlHasActionTimeTemplate(e) {
-  return `{% set bad = ['unknown', 'unavailable', 'none', ''] %}
-{% set start_text = states('${e.hvacWindowStart}') %}
-{% set end_text = states('${e.hvacWindowEnd}') %}
-{% if start_text in bad or end_text in bad or start_text == end_text %}
-  false
-{% else %}
-  {% set start = today_at(start_text) %}
-  {% set end = today_at(end_text) %}
-  {% set in_window = start <= now() < end if start < end else now() >= start or now() < end %}
-  {% set window_end = end + timedelta(days=1) if start > end and now() >= start else end %}
-  {{ in_window and as_timestamp(window_end) - as_timestamp(now()) > 60 }}
-{% endif %}`;
+  return `{% set remaining = states('${e.peakMinutesRemaining}') %}
+{% set seconds_left = (remaining | float(0)) * 60 %}
+{{ is_number(remaining) and seconds_left > 60 }}`;
 }
 
-function peakControlEventKeyTemplate(e) {
-  return `{%- set start_text = states('${e.hvacWindowStart}') -%}
-{%- set end_text = states('${e.hvacWindowEnd}') -%}
-{%- set overnight = start_text not in ['unknown', 'unavailable', 'none', ''] and end_text not in ['unknown', 'unavailable', 'none', ''] and start_text > end_text -%}
-{%- set event_date = (now() - timedelta(days=1)).strftime('%Y-%m-%d') if overnight and now() < today_at(end_text) else now().strftime('%Y-%m-%d') -%}
-{{- event_date ~ '-' ~ start_text[:5] ~ '-' ~ end_text[:5] -}}`;
+function peakControlEventKeyTemplate(_e) {
+  // E-15 has separate morning/evening winter periods and one afternoon
+  // summer period. This key survives automation reloads and HA restarts.
+  return `{{ now().strftime('%Y-%m-%d') ~ ('-am' if now().hour < 12 else '-pm') }}`;
 }
 
 function hvacZones(e) {
@@ -412,6 +391,7 @@ function controllerStillEligibleConditions(e) {
   return [
     { condition: "state", entity_id: e.hvacControllerActive, state: "on" },
     { condition: "state", entity_id: e.hvacResponseEnabled, state: "on" },
+    { condition: "state", entity_id: FAMILY_PRESENCE, state: "home" },
     { condition: "state", entity_id: e.peakScheduleValid, state: "on" },
     { condition: "state", entity_id: e.peakWindow, state: "on" },
     { condition: "template", value_template: peakControlWindowTemplate(e) },
@@ -531,6 +511,7 @@ function overrideZoneAction(zone, e) {
 function peakHvacActivationConditions(e, zones) {
   return [
     { condition: "state", entity_id: e.hvacResponseEnabled, state: "on" },
+    { condition: "state", entity_id: FAMILY_PRESENCE, state: "home" },
     { condition: "state", entity_id: e.peakScheduleValid, state: "on" },
     { condition: "state", entity_id: e.peakWindow, state: "on" },
     { condition: "template", value_template: peakControlWindowTemplate(e) },
@@ -767,7 +748,7 @@ export function buildAutomations(e) {
       id: "home_energy_peak_hvac_response",
       config: {
         alias: "Home Energy — peak HVAC response",
-        description: "Once per configured peak-control window, raises only selected cooling setpoints when forecast/SOC or sustained EG4 grid-import risk requires demand reduction.",
+        description: "Once per active SRP peak window while family is home, raises selected cooling setpoints when forecast/SOC or sustained EG4 grid-import risk requires demand reduction.",
         triggers: [
           { platform: "time_pattern", minutes: "/1", seconds: "30" },
           {
@@ -776,8 +757,7 @@ export function buildAutomations(e) {
               e.hvacResponseEnabled,
               e.peakScheduleValid,
               e.peakWindow,
-              e.hvacWindowStart,
-              e.hvacWindowEnd,
+              FAMILY_PRESENCE,
             ],
           },
         ],
@@ -814,6 +794,10 @@ export function buildAutomations(e) {
         ],
         conditions: [
           { condition: "state", entity_id: e.hvacControllerActive, state: "on" },
+          {
+            condition: "template",
+            value_template: `{{ not states('${e.hvacControllerStatus}').startswith('Releasing') }}`,
+          },
         ],
         actions: [
           ...zones.map((zone) => overrideZoneAction(zone, e)),
@@ -847,13 +831,15 @@ export function buildAutomations(e) {
       id: "home_energy_peak_hvac_release",
       config: {
         alias: "Home Energy — release peak HVAC response",
-        description: "Just before the configured end, or at actual peak end, master disable, or invalid schedule, restores only still-owned targets and yields to manual/scheduled changes.",
+        description: "Before actual SRP peak end, on family departure, master disable, or invalid schedule, restores still-owned targets before signalling that the comfort scheduler may take over.",
         triggers: [
           { platform: "time_pattern", minutes: "/1", seconds: "15" },
           { platform: "state", entity_id: e.hvacResponseEnabled, to: "off" },
           { platform: "state", entity_id: e.peakWindow, to: "off" },
           { platform: "state", entity_id: e.peakScheduleValid, to: "off" },
-          { platform: "state", entity_id: [e.hvacWindowStart, e.hvacWindowEnd] },
+          { platform: "state", entity_id: "input_boolean.juicebox_srp_schedule_enabled", to: "off" },
+          { platform: "state", entity_id: "automation.juicebox_apply_local_charge_policy", to: "off" },
+          { platform: "state", entity_id: FAMILY_PRESENCE },
         ],
         conditions: [
           { condition: "state", entity_id: e.hvacControllerActive, state: "on" },
@@ -862,7 +848,8 @@ export function buildAutomations(e) {
               condition: "template",
               value_template: `{{ not is_state('${e.hvacResponseEnabled}', 'on')
                 or not is_state('${e.peakScheduleValid}', 'on')
-                or not is_state('${e.peakWindow}', 'on') }}`,
+                or not is_state('${e.peakWindow}', 'on')
+                or not is_state('${FAMILY_PRESENCE}', 'home') }}`,
             },
             { condition: "template", value_template: peakControlOutsideWindowTemplate(e) },
             { condition: "template", value_template: peakControlEndingSoonTemplate(e) },
@@ -875,9 +862,9 @@ export function buildAutomations(e) {
             data: { value: "Releasing — waiting for any in-flight thermostat call to settle." },
           },
           { delay: "00:00:10" },
-          { action: "input_boolean.turn_off", target: { entity_id: e.hvacControllerActive } },
           ...zones.map((zone) => releaseZoneAction(zone, e)),
           ...zones.map(clearZoneOwnershipAction),
+          { action: "input_boolean.turn_off", target: { entity_id: e.hvacControllerActive } },
           {
             action: "input_text.set_value",
             target: { entity_id: e.hvacControllerStatus },
