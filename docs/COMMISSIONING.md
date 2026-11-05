@@ -4,7 +4,7 @@
 
 The first installation was commissioned August 30, 2026; Peak Controls followed August 31. Those dated checks establish the original installation, not current runtime health or the later seasonal controller.
 
-The November 4 rebuild deployed the combined dashboard and automatic EG4 winter controller **0.2.1**. At this checkpoint 0.2.1 remains live. Reviewed dashboard/alert configuration has exact readback with 11 dashboard and 103 automation template checks. All 28 desktop/mobile light/dark browser cases passed, with 80 screenshots and zero browser errors. The browser profile cleanup subsequently hit a file-removal race; the exact profile was removed after proving no owned browser remained, and bounded cleanup retries were added. Controller/model Python corrections await installation; **0.2.2 is not released**.
+The November 4 rebuild deployed the combined dashboard and automatic EG4 winter controller **0.2.1**. At this checkpoint 0.2.1 remains live. Reviewed dashboard/alert configuration has exact readback with 11 dashboard and 103 automation template checks. All 28 desktop/mobile light/dark browser cases passed, with 80 screenshots and zero browser errors. The browser profile cleanup subsequently hit a file-removal race; the exact profile was removed after proving no owned browser remained, and bounded cleanup retries were added. Controller/model Python corrections await installation; **0.2.2 is prepared for installation**.
 
 - [Home Energy](http://172.16.106.12:8123/home-energy/whole-home)
 - [EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)

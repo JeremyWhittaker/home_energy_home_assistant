@@ -1,6 +1,6 @@
 # Whole-home energy implementation checklist
 
-Status values: `implemented`, `blocked`, `deferred`, `not applicable`. Source implementation, deployed configuration and observed behavior are separate evidence. This checkpoint is November 5, 2026: live component 0.2.1, with subsequent reviewed source changes awaiting deployment; 0.2.2 is not released.
+Status values: `implemented`, `blocked`, `deferred`, `not applicable`. Source implementation, deployed configuration and observed behavior are separate evidence. This checkpoint is November 5, 2026: live component 0.2.1, with subsequent reviewed source changes awaiting deployment; 0.2.2 is prepared for installation.
 
 | Requirement | Status | Dated evidence or next check |
 | --- | --- | --- |
@@ -30,4 +30,4 @@ Status values: `implemented`, `blocked`, `deferred`, `not applicable`. Source im
 | Actual EV energy gain and Grey behavior | blocked | Orange current measurement is unreliable; Grey remains offline. Policy permission/state is not energy delivery |
 | Secrets, backups and existing IDs/routes | implemented | Supported deployment backups, journals, strict validation, unavailable states and read-only UI guards preserved |
 | Peer review and source tests | implemented | AGY then Claude completed; material findings tracked with independent checks. Current source passes model/native-template/Node validation |
-| Reviewed release/deployed UI acceptance | deferred | Configuration/UI readback and 28-case visual acceptance passed. Component installation/fresh runtime verification pending; no 0.2.2 release yet |
+| Reviewed release/deployed UI acceptance | deferred | Configuration/UI readback and 28-case visual acceptance passed. Component installation/fresh runtime verification pending; 0.2.2 prepared for installation |
