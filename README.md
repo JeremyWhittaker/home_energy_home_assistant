@@ -22,7 +22,7 @@ The existing **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)*
 
 The dedicated [EG4 project](https://github.com/JeremyWhittaker/eg4_home_assistant) owns inverter and battery detail. This project combines EG4 with the separate Enphase array and utility data. On November 4 the local dongle readings were unavailable; cloud readings supplied the working EG4 monitoring and seasonal controller.
 
-Initial commissioning took place on August 30–31, 2026. The combined dashboard and seasonal controller were rebuilt and deployed on November 4; **0.2.1 remains the live component at this November 5 checkpoint**. Reviewed dashboard and alert configuration is deployed with exact readback; all 28 desktop/mobile light/dark cases passed, and representative flow captures were inspected. Controller and measurement Python corrections await installation; **0.2.2 is prepared for installation**. See [Commissioning](docs/COMMISSIONING.md) for dated acceptance and remaining checks.
+Initial commissioning took place on August 30–31, 2026; the seasonal rebuild was installed November 4. **0.2.2 is installed as of November 5.** Core reports RUNNING, the original entry is loaded and saved inverter/A/C switches are preserved. Dashboard and alert configuration has exact readback, with 11 dashboard and 103 automation template checks; all 28 desktop/mobile light/dark cases passed. Fresh runtime and guarded winter verification passed. The next natural peak start and an unexplained non-schedule parameter difference remain open; see [Commissioning](docs/COMMISSIONING.md).
 
 Restart acceptance requires Core to report **RUNNING** as well as the original integration entry being loaded. An available API can precede completed startup; thermostat and shared-policy readiness are additional live checks.
 
@@ -55,7 +55,7 @@ The dashboard does **not** claim separate backup-panel and regular-panel loads. 
 
 ## Alerts
 
-The reviewed alert configuration is deployed. Its controller/measurement dependency changes await the Python component update at this checkpoint; natural failure and boundary observations remain separate acceptance.
+The reviewed alert configuration and 0.2.2 controller/measurement changes are installed. Natural failure and boundary observations remain separate acceptance.
 
 Three alert automations notify the existing `script.notify_family` targets and create a persistent Home Assistant notification:
 
@@ -73,7 +73,7 @@ The response preserves HVAC modes and snapshots each target before changing it. 
 
 ## Automatic inverter scheduling
 
-The deployed 0.2.1 controller provides a separate **Automatic EG4 schedule** switch. It starts off, persists its choice and uses the existing loaded EG4 cloud client; it stores no additional login. The shared SRP calculator must be enabled, recent, consistent with the E-15 calendar and configured for America/Phoenix. The reviewed source below separates the previously combined clock diagnostics: the inverter RTC offset must stay within ±120 seconds of its response receipt. Runtime frames and clock-response receipts must be no older than 120 seconds, with future runtime/receipt timestamps rejected. These are separate readback guards and diagnostics; a recent cloud poll does not prove recent inverter telemetry.
+The deployed seasonal controller provides a separate **Automatic EG4 schedule** switch. It starts off, persists its choice and uses the existing loaded EG4 cloud client; it stores no additional login. The shared SRP calculator must be enabled, recent, consistent with the E-15 calendar and configured for America/Phoenix. The installed 0.2.2 controller separates the previously combined clock diagnostics: the inverter RTC offset must stay within ±120 seconds of its response receipt. Runtime frames and clock-response receipts must be no older than 120 seconds, with future runtime/receipt timestamps rejected. These are separate readback guards and diagnostics; a recent cloud poll does not prove recent inverter telemetry.
 
 | Calendar | Inverter behavior |
 |---|---|

@@ -4,7 +4,9 @@
 
 The first installation was commissioned August 30, 2026; Peak Controls followed August 31. Those dated checks establish the original installation, not current runtime health or the later seasonal controller.
 
-The November 4 rebuild deployed the combined dashboard and automatic EG4 winter controller **0.2.1**. At this checkpoint 0.2.1 remains live. Reviewed dashboard/alert configuration has exact readback with 11 dashboard and 103 automation template checks. All 28 desktop/mobile light/dark browser cases passed, with 80 screenshots and zero browser errors. The browser profile cleanup subsequently hit a file-removal race; the exact profile was removed after proving no owned browser remained, and bounded cleanup retries were added. Controller/model Python corrections await installation; **0.2.2 is prepared for installation**.
+The November 4 rebuild deployed controller 0.2.1. The reviewed **0.2.2 update is installed November 5**: exact component hashes matched source, the original energy entries returned loaded, Core reached RUNNING and Honeywell republished all three cooling zones. Saved inverter and A/C response switches were preserved. The inverter controller returned Applied and verified with no error; an independent fresh frame showed 100% charge, no battery discharge and energized mains off peak.
+
+Dashboard/alert configuration has exact readback with 11 dashboard and 103 automation-template checks. All 28 desktop/mobile light/dark cases passed, with 80 screenshots and zero browser errors. The browser profile cleanup then hit a file-removal race; the exact profile was removed after proving no owned browser remained, and bounded cleanup retries were added. The restart checker was also corrected to require Core RUNNING, after its original API/entry-only check returned before Honeywell had finished startup.
 
 - [Home Energy](http://172.16.106.12:8123/home-energy/whole-home)
 - [EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)
@@ -23,7 +25,7 @@ The master starts off on a new installation, but the actual inverter master was 
 | November 5 original 05:00 start watch | **FAIL:** early reported charging followed by missing measurements; 130 fresh records below 140 required | Natural peak-start behavior not proven; preserve this failure |
 | November 5 later 05:33–09:19 watch | **READY:** 109 qualified peak-demand observations all showed battery support; 207 peak charger-stop records | This later success does not repair the earlier 05:00 failure or 05:20–05:33 gap |
 | November 5 end-of-peak window | Five 09:07–09:11 non-discharge records and two 09:18–09:19 EV permission-release records | Battery charging began 07:43 with solar surplus, so timer-caused 09:00 stop was not isolated; no actual EV gain proven |
-| Reviewed source corrections | Strict separate clock/frame diagnostics, recovery/preview/retry fixes, forecast/failure reporting and numeric equality regressions pass | Await supported deployment, UI checks and fresh runtime evidence |
+| Reviewed 0.2.2 corrections | Installed; full Core startup, original entries, preserved switches, exact configuration and fresh separate clock/frame diagnostics verified | Natural next peak start and thermostat persistence remain field checks |
 
 The reviewed net comparator requires 24 distinct valid hourly intervals per source and uses max(1 kWh, 2% of the larger absolute net). Replaying 324 eligible historical days yields 287 within tolerance and 37 exceptions after correcting six tiny numeric equality cases. Separate utility import/export remain unvalidated. The newest complete SRP day may still be revised.
 
@@ -73,3 +75,7 @@ For a new root-owned installation, follow the audited installer and [Operations]
 | Local EG4 dongle | Unavailable in the November 4 observation; no speculative register writes |
 
 Do not use “Run actions” on alert/control automations as a routine commissioning shortcut. It bypasses normal conditions and can send messages or operate equipment. No live notification or hardware test was performed for this source slice; any deliberate test needs its own explicit scope and expected result.
+
+## Additional readback exception — November 5
+
+The independent read matches all 49 dispatch targets plus the 20% reserve and all 392 saved weekly values. Of 463 other numeric fields compared with the original November 4 backup, 462 match; `HOLD_SPEC_LOAD_COMPENSATE` changed from 51 to 54. Its exact meaning, units and cause are undocumented in the inspected sources. The controller does not name it as a command target, which alone does not prove vendor operations cannot affect it. Preserve both readbacks and obtain the exact-model/firmware vendor definition before any change. No calibration write or causal conclusion is justified. The original audit failure is preserved; its expected-count assertion also incorrectly counted 49 where the selected set included reserve as a fiftieth value.

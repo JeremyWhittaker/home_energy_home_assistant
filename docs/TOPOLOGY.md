@@ -48,7 +48,7 @@ Power can flow in either direction at the inverter and service boundary. Envoy r
 - Enphase: restored local aggregate matches the 14-inverter sum; one “Pool shade” location reports zero/cloud trouble. A 179-hour local-counter gap through November 4 prevents allocating its catch-up reliably to individual days.
 - EG4: two batteries, 560 Ah reported total, and a 20% operating reserve.
 - SRP: the existing entry is loaded after the November 4 history repair; 52,920 retained hours were checked. Separate delivered/received utility directions remain unvalidated. Missing data is surfaced rather than converted to zero.
-- Local EG4 dongle: unavailable since the November 4 observation. Cloud telemetry/control is a separate path; no speculative local-register writes were made.
+- Local EG4 dongle: recovered after the November 5 Core restart. All 59 entities became numeric; one direct new-client read confirmed 254 registers, including PV, charge and cell-summary values, with the third bank missing. Cloud remains the seasonal-control path; no local-register writes were made.
 
 ## Important boundary
 
