@@ -100,6 +100,11 @@ export const helperSpecifications = Object.freeze([
       icon: "mdi:message-badge-outline", min: 0, max: 128, mode: "text",
     },
   })),
+  ...["day", "key", "local_key"].map((kind) => ({
+    domain: "input_text", id: `home_energy_demand_review_${kind}`,
+    config: { name: `Home Energy demand review ${kind.replaceAll("_", " ")}`,
+      icon: "mdi:email-check-outline", min: 0, max: 128, mode: "text" },
+  })),
   {
     domain: "input_boolean",
     id: "home_energy_hvac_response_enabled",
@@ -293,6 +298,121 @@ const notifyFamily = (title, message, latch, alertKey = "{{ alert_key }}") => [
     data: { value: alertKey },
   },
 ];
+
+const JEREMY_EMAIL_ACCOUNT = "notify.email_notification_sender_1";
+
+export function jeremyEmailAvailableTemplate(e) {
+  return `{{ state_attr('${e.sourceHealth}', 'jeremy_email_available') == true
+    and states['${JEREMY_EMAIL_ACCOUNT}'] is not none
+    and not is_state('${JEREMY_EMAIL_ACCOUNT}', 'unavailable') }}`;
+}
+
+function emailAction(title, message) {
+  return { action: "email_notifier.send", continue_on_error: true,
+    data: { account: JEREMY_EMAIL_ACCOUNT, title, message } };
+}
+
+function jeremyEmailOrLocal(e, title, message, notificationId) {
+  return { choose: [{ conditions: [{ condition: "template", value_template: jeremyEmailAvailableTemplate(e) }],
+    sequence: [emailAction(title, message)],
+  }], default: [{ action: "persistent_notification.create", data: {
+    title: "Home Energy: Jeremy email unavailable", notification_id: notificationId,
+    message: "The configured email action/account is unavailable. The energy notice remains in Home Assistant; no email delivery is claimed.",
+  } }] };
+}
+
+export function currentEnergyContext(e) {
+  return `Reported snapshot at {{ now().strftime('%b %-d, %-I:%M %p %Z') }}.
+Grid import: {{ states('${e.gridImportPower}') }} W.
+Battery: {{ states('${e.batteryNetPower}') }} W (positive discharge, negative charge), SOC {{ states('${e.batterySoc}') }}%.
+Inverter controller: {{ states('sensor.home_energy_inverter_schedule_status') }}; profile {{ state_attr('sensor.home_energy_inverter_schedule_status', 'profile') or 'unverified' }}.
+Orange EVSE: {{ states('sensor.openevse_evse_state') }}; Grey EVSE: {{ states('sensor.juicebox_status') }}.
+Downstairs: {{ states('${e.downstairsClimate}') }}, {{ state_attr('${e.downstairsClimate}', 'hvac_action') or 'unknown action' }}.
+Primary: {{ states('${e.primaryClimate}') }}, {{ state_attr('${e.primaryClimate}', 'hvac_action') or 'unknown action' }}.
+Upstairs: {{ states('${e.upstairsClimate}') }}, {{ state_attr('${e.upstairsClimate}', 'hvac_action') or 'unknown action' }}.
+These are current reported states, not proof of an appliance's contribution, delivered EV energy or billed demand cost.`;
+}
+
+function notifyFamilyAndJeremyEmail(e, title, message, latch) {
+  const original = notifyFamily(title, message, latch);
+  return [...original.slice(0, -1), original.at(-1),
+    jeremyEmailOrLocal(e, title, `${message}\n\n${currentEnergyContext(e)}`, "home_energy_peak_email_unavailable")];
+}
+
+export function demandReviewTemplates(e) {
+  const id = e.srpDemandAudit;
+  const prefix = `{% set checked = as_timestamp(state_attr('${id}', 'last_checked'), none) %}
+{% set age = as_timestamp(now()) - checked if checked is number else -1 %}
+{% set day = state_attr('${id}', 'latest_complete_day') %}
+{% set parsed = as_datetime(day, none) %}
+{% set day_age = (now().date() - parsed.date()).days if parsed is not none else -1 %}
+{% set demand = state_attr('${id}', 'latest_daily_max_kw') %}
+{% set threshold = states('${e.peakImportThreshold}') %}
+{% set status = states('${id}') %}
+{% set material_key = day ~ '|' ~ status ~ '|' ~ (demand | round(1) if demand is number else 'unknown') %}`;
+  const usable = `age is number and 0 <= age <= 21600 and 1 <= day_age <= 2
+    and state_attr('${id}', 'content_hash') is string
+    and (state_attr('${id}', 'content_hash') | length) > 0`;
+  return {
+    email: `${prefix}
+{{ ${usable} and now().hour >= 10
+    and (status == 'mismatch' or (status == 'matches' and demand is number
+      and is_number(threshold) and demand >= threshold | float))
+    and states('input_text.home_energy_demand_review_day') != now().strftime('%Y-%m-%d')
+    and states('input_text.home_energy_demand_review_key') != material_key }}`,
+    local: `${prefix}
+{{ not (${usable}) or status in ['incomplete', 'unsupported', 'unknown', 'unavailable'] }}`,
+    key: `${prefix}{{ material_key }}`,
+    localKey: `{{ now().strftime('%Y-%m-%d') ~ '|' ~ states('${id}') ~ '|'
+      ~ (state_attr('${id}', 'latest_complete_day') or 'none') }}`,
+    message: `SRP demand audit: {{ states('${id}') }}. Latest complete day: {{ state_attr('${id}', 'latest_complete_day') or 'unavailable' }}.
+Reported daily on-peak maximum: {{ state_attr('${id}', 'latest_daily_max_kw') }} kW.
+{% set events = state_attr('${id}', 'latest_complete_day_winning_intervals') or [] %}
+{% for item in events[:3] %}Winning half-hour: {{ item['start'] }} to {{ item['end'] }}, {{ item['demand_kw'] }} kW.\n{% endfor %}
+This checks utility interval demand against its daily summary; a derived cycle average is not independent bill verification. Demand-charge dollars remain unverified; the projected total bill is not the demand-charge line.
+Current HA states do not identify which appliance caused an earlier utility event. Review coincident history and control faults before changing habits; avoid overlapping discretionary loads during verified peak hours when practical.
+Recent utility days may be revised. Source caveats: {{ state_attr('${id}', 'caveats') or 'See SRP demand audit details.' }}`,
+  };
+}
+
+function buildDemandReview(e) {
+  const t = demandReviewTemplates(e);
+  const set = (kind, value) => ({ action: "input_text.set_value",
+    target: { entity_id: `input_text.home_energy_demand_review_${kind}` }, data: { value } });
+  return { id: "home_energy_srp_demand_review", config: {
+    alias: "Home Energy: daily SRP demand review",
+    description: "At most one meaningful Jeremy email attempt per day; only recent completed utility days, never invented billing dollars.",
+    triggers: [{ platform: "state", entity_id: e.srpDemandAudit },
+      { platform: "time", at: "10:00:00" }, { platform: "time_pattern", minutes: "15" },
+      { platform: "homeassistant", event: "start" }],
+    variables: { review_key: t.key, local_key: t.localKey },
+    conditions: [],
+    actions: [{ choose: [
+      { conditions: [{ condition: "template", value_template: t.email }], sequence: [
+        { choose: [{ conditions: [{ condition: "template", value_template: jeremyEmailAvailableTemplate(e) }], sequence: [
+          // Persist attempt intent before the service to bound restart/timeout duplicates.
+          set("day", "{{ now().strftime('%Y-%m-%d') }}"),
+          set("key", "{{ review_key | default('unavailable') }}"),
+          emailAction("Home Energy: SRP demand review", t.message),
+          { action: "persistent_notification.create", data: {
+            title: "Home Energy: demand review email requested", notification_id: "home_energy_demand_review",
+            message: `${t.message}\nEmail was requested through the existing Jeremy account; inbox delivery is not independently confirmed.`,
+          } },
+        ] }], default: [{ action: "persistent_notification.create", data: {
+          title: "Home Energy: demand review email unavailable", notification_id: "home_energy_demand_email_unavailable",
+          message: "The configured Jeremy email action/account is unavailable. Demand findings remain local; no email attempt or delivery is claimed.",
+        } }] },
+      ] },
+      { conditions: [{ condition: "template", value_template: t.local },
+          { condition: "template", value_template: "{{ states('input_text.home_energy_demand_review_local_key') != local_key | default('unavailable') }}" }], sequence: [
+        { action: "persistent_notification.create", data: {
+          title: "Home Energy: SRP demand audit incomplete", notification_id: "home_energy_demand_review",
+          message: `State: {{ states('${e.srpDemandAudit}') }}. A fresh complete demand audit is unavailable or unsupported. Missing intervals are not zero; no demand-cost conclusion or email is issued. {{ state_attr('${e.srpDemandAudit}', 'caveats') or '' }}`,
+        } }, set("local_key", "{{ local_key | default('unavailable') }}"),
+      ] },
+    ] }], mode: "single",
+  } };
+}
 
 function sharedPeakExpression(e) {
   return `is_state('${e.peakScheduleValid}', 'on')
@@ -870,8 +990,8 @@ export function buildAutomations(e) {
             value_template: `{{ states('${e.peakImportAlertKey}') != alert_key }}`,
           },
         ],
-        actions: notifyFamily(
-          "Home Energy: sustained peak import",
+        actions: notifyFamilyAndJeremyEmail(
+          e, "Home Energy: sustained peak import",
           `Whole-property grid import has remained above {{ states('${e.peakImportThreshold}') }} kW for five minutes during the SRP peak window. {% set import_power = states('${e.gridImportPower}') %}Current import is {% if is_number(import_power) %}{{ (import_power | float / 1000) | round(1) }} kW{% else %}unavailable{% endif %}; sustained import can increase billed demand.`,
           e.peakImportAlertKey,
         ),
@@ -879,6 +999,7 @@ export function buildAutomations(e) {
       },
     },
     ...buildFailureAlerts(e),
+    buildDemandReview(e),
     {
       id: "home_energy_peak_hvac_response",
       config: {

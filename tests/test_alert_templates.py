@@ -6,23 +6,32 @@ import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from homeassistant.helpers.template import Template
+
+from custom_components.home_energy_monitor.sensor import (
+    HomeEnergySensor,
+    HomeEnergySensorDescription,
+)
 
 
 @pytest.fixture(scope="module")
 def generated():
     script = r"""
 import {discoveryContract} from './src/discovery.mjs';
-import {buildAutomations, householdShortfallTemplate} from './src/site-config.mjs';
+import {buildAutomations, householdShortfallTemplate,
+  demandReviewTemplates, jeremyEmailAvailableTemplate} from './src/site-config.mjs';
 const slug=(s)=>s.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
 const e={...discoveryContract.static};
 for(const [key,[domain,name]] of Object.entries(discoveryContract.calculated))
  e[key]=`${domain}.home_energy_${slug(name)}`;
 for(const [key,[platform,domain,name]] of Object.entries(discoveryContract.sources))
  e[key]=`${domain}.${platform}_${slug(name)}`;
-console.log(JSON.stringify({e,automations:buildAutomations(e),shortfall:householdShortfallTemplate(e)}));
+console.log(JSON.stringify({e,automations:buildAutomations(e),
+ shortfall:householdShortfallTemplate(e), demand:demandReviewTemplates(e),
+ emailAvailable:jeremyEmailAvailableTemplate(e)}));
 """
     return json.loads(
         subprocess.run(
@@ -293,3 +302,143 @@ async def test_new_templates_render_during_startup_and_deployer_prevalidation(
                 event_key="test",
                 this={"entity_id": "automation.offline_test"},
             )
+
+
+async def demand_context(hass, freezer, generated, *, status="matches", maximum=7.2, **changes):
+    freezer.move_to("2026-11-06T17:05:00+00:00")
+    e = generated["e"]
+    attrs = {
+        "last_checked": datetime.now(UTC).isoformat(),
+        "latest_complete_day": "2026-11-05",
+        "latest_daily_max_kw": maximum,
+        "content_hash": "a" * 64,
+        "billed_cost_verified": False,
+        "caveats": ["Utility readings may revise"],
+        "latest_complete_day_winning_intervals": [
+            {
+                "start": "2026-11-05T17:00:00-07:00",
+                "end": "2026-11-05T17:30:00-07:00",
+                "demand_kw": maximum,
+            }
+        ],
+    }
+    attrs.update(changes)
+    hass.states.async_set(e["srpDemandAudit"], status, attrs)
+    hass.states.async_set(e["peakImportThreshold"], "5", {"unit_of_measurement": "kW"})
+    return attrs
+
+
+@pytest.mark.parametrize(
+    ("status", "maximum", "email", "local"),
+    [
+        ("matches", 7.2, True, False),
+        ("matches", 5, True, False),
+        ("matches", 4.9, False, False),
+        ("mismatch", 2, True, False),
+        ("incomplete", 9, False, True),
+        ("unsupported", 9, False, True),
+    ],
+)
+async def test_daily_demand_email_is_only_recent_material_utility_data(
+    hass, context, generated, freezer, status, maximum, email, local
+):
+    await demand_context(hass, freezer, generated, status=status, maximum=maximum)
+    assert render(hass, generated["demand"]["email"]) is email
+    assert render(hass, generated["demand"]["local"]) is local
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"last_checked": "2026-11-06T10:59:00+00:00"},
+        {"last_checked": "2026-11-06T17:06:00+00:00"},
+        {"latest_complete_day": "2026-11-03"},
+        {"latest_complete_day": "2026-11-06"},
+        {"latest_complete_day": None},
+        {"content_hash": ""},
+    ],
+)
+async def test_stale_future_partial_or_backfilled_demand_cannot_email(
+    hass, context, generated, freezer, changes
+):
+    await demand_context(hass, freezer, generated, **changes)
+    assert render(hass, generated["demand"]["email"]) is False
+    assert render(hass, generated["demand"]["local"]) is True
+
+
+async def test_daily_demand_latches_one_attempt_and_ignores_nonmaterial_revisions(
+    hass, context, generated, freezer
+):
+    await demand_context(hass, freezer, generated)
+    key = render(hass, generated["demand"]["key"])
+    assert render(hass, generated["demand"]["email"]) is True
+    hass.states.async_set("input_text.home_energy_demand_review_key", key)
+    assert render(hass, generated["demand"]["email"]) is False
+    await demand_context(hass, freezer, generated, content_hash="b" * 64)
+    assert render(hass, generated["demand"]["email"]) is False
+    await demand_context(hass, freezer, generated, maximum=9)
+    assert render(hass, generated["demand"]["email"]) is True
+    hass.states.async_set("input_text.home_energy_demand_review_day", "2026-11-06")
+    assert render(hass, generated["demand"]["email"]) is False
+
+
+async def test_email_notifier_requires_service_and_existing_nonunavailable_account(
+    hass, context, generated
+):
+    description = HomeEnergySensorDescription(
+        key="source_health",
+        name="Source health",
+        classification="Derived",
+        value_fn=lambda _: "Healthy",
+    )
+    entity = HomeEnergySensor(
+        SimpleNamespace(hass=hass, data=None),
+        SimpleNamespace(entry_id="mail-test"),
+        description,
+    )
+
+    def publish_capability():
+        attrs = entity.extra_state_attributes
+        hass.states.async_set(context["sourceHealth"], "Healthy", attrs)
+        return render(hass, generated["emailAvailable"])
+
+    assert publish_capability() is False
+    hass.services.async_register("email_notifier", "send", lambda call: None)
+    assert publish_capability() is False
+    hass.states.async_set("notify.email_notification_sender_1", "unknown")
+    assert publish_capability() is True
+    hass.states.async_set("notify.email_notification_sender_1", "unavailable")
+    assert publish_capability() is False
+    hass.states.async_set("notify.email_notification_sender_1", "unknown")
+    hass.services.async_remove("email_notifier", "send")
+    assert publish_capability() is False
+
+
+async def test_demand_messages_and_prevalidation_variables_remain_safe(
+    hass, context, generated, freezer
+):
+    await demand_context(hass, freezer, generated)
+    text = render(hass, generated["demand"]["message"])
+    assert "2026-11-05T17:00:00-07:00" in text and "7.2 kW" in text
+    assert "Demand-charge dollars remain unverified" in text
+    assert "do not identify which appliance" in text
+    cfg = automation(generated, "home_energy_srp_demand_review")
+
+    def templates(value):
+        if isinstance(value, str) and ("{{" in value or "{%" in value):
+            yield value
+        elif isinstance(value, dict):
+            for child in value.values():
+                yield from templates(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from templates(child)
+
+    for template in templates(cfg):
+        render(
+            hass,
+            template,
+            alert_key="test",
+            event_key="test",
+            this={"entity_id": "automation.test"},
+        )

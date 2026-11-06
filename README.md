@@ -123,3 +123,14 @@ The utility comparison requires 24 distinct valid hourly intervals from each sou
 Source ages are labelled **HA report age**, with no age supplied for unusable or incorrectly unit-labelled values. A recent report does not prove a recent vendor frame. Net comparison equality includes only a 1e-9 kWh allowance for binary arithmetic, without changing the 1 kWh/2% physical tolerance.
 
 Tigo-to-EG4 comparisons now expire with their source samples and expose alignment/freshness details. Local Enphase remains preferred; a separately identified cloud power fallback is disabled by default until its whole-array scope is verified, and cumulative energy sources are never spliced. The seasonal controller validates the existing shared SRP helpers and uploaded winter profile. Installation leaves new automatic inverter control off until explicitly enabled and verified.
+
+
+## Demand review and Jeremy email — source awaiting rollout
+
+The new reporting slice is prepared for HomeEnergy 0.2.3 with SRP 1.2.4; those version labels describe the parent's planned rollout, not a deployment performed by this source change.
+
+The existing 5 kW / five-minute peak-import notice keeps its family/persistent alert and also requests an email through Jeremy's already-configured account. The email includes reported battery power/SOC, controller/profile, EVSE state and each thermostat's mode/action. Those current states do not prove which appliance caused import or what the utility will bill.
+
+The daily SRP review uses the new Demand audit from the same discovered SRP account. After 10 AM it may email a recent completed day's meaningful daily-versus-interval mismatch or a verified daily maximum at/above the existing threshold. Attempts are limited to one per day; unchanged event summaries and old backfills do not generate new emails. Incomplete, unsupported or stale audits remain local diagnostics. Demand-charge dollars are unverified: a bill projection is not a demand-charge line.
+
+The configured email account and registered service must be available; missing capability leaves a local notice. An email action request does not independently confirm inbox delivery. No recipient address, new phone recipient, equipment action or utility-login flow is introduced. See [Operations](docs/OPERATIONS.md#demand-review-email) for qualification and retry limits.

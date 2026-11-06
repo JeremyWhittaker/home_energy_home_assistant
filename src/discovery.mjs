@@ -42,6 +42,7 @@ const CALCULATED = Object.freeze({
 });
 
 const SOURCES = Object.freeze({
+  srpDemandAudit: ["srp_energy_monitor", "sensor", "Demand audit"],
   eg4PvPower: ["eg4_web_monitor", "sensor", "PV Total Power"],
   eg4YieldLifetime: ["eg4_web_monitor", "sensor", "Yield (Lifetime)"],
   eg4GridImportLifetime: ["eg4_web_monitor", "sensor", "Grid Import (Lifetime)"],
@@ -121,6 +122,19 @@ function resolve(registry, available, { platform, domain, originalName, key }) {
   return entityId;
 }
 
+export function discoverDemandAudit({ entities, states }) {
+  const available = liveIds(states);
+  const anchors = entities.filter((entry) => entry.platform === "srp_energy_monitor"
+    && entry.disabled_by == null && entry.entity_id?.startsWith("sensor.")
+    && normalize(entry.original_name) === "current demand" && available.has(entry.entity_id));
+  if (anchors.length !== 1 || !anchors[0].config_entry_id) {
+    throw new Error("Demand audit requires one unambiguous SRP Current demand account entry");
+  }
+  const sameAccount = entities.filter((entry) => entry.config_entry_id === anchors[0].config_entry_id);
+  return resolve(sameAccount, available, { platform: "srp_energy_monitor", domain: "sensor",
+    originalName: "Demand audit", key: "srpDemandAudit" });
+}
+
 export function discoverHomeEnergy({ entities, states }) {
   if (!Array.isArray(entities) || !Array.isArray(states)) {
     throw new TypeError("entities and states must be arrays");
@@ -137,7 +151,8 @@ export function discoverHomeEnergy({ entities, states }) {
   ]));
   const sources = Object.fromEntries(Object.entries(SOURCES).map(([key, [platform, domain, originalName]]) => [
     key,
-    resolve(entities, available, { platform, domain, originalName, key }),
+    key === "srpDemandAudit" ? discoverDemandAudit({ entities, states })
+      : resolve(entities, available, { platform, domain, originalName, key }),
   ]));
   return Object.freeze({
     entities: Object.freeze({ ...calculated, ...sources, ...STATIC }),

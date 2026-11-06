@@ -275,3 +275,37 @@ a genuine 1.1 kWh difference and even 1.00000001 kWh remain outside a 1 kWh
 allowance. The physical greater of 1 kWh or 2%-of-larger-absolute-net tolerance is
 unchanged. This correction does not calibrate either meter or prove separate
 utility import/export directions.
+
+
+## Demand review email
+
+This source slice targets the parent's planned HomeEnergy 0.2.3 / SRP 1.2.4 rollout; no version metadata or live deployment was changed by the worker. The four persistent failure diagnostics retain their local-only scope. The pre-existing 5 kW / five-minute import alert additionally requests a Jeremy email through the existing configured account, without adding family recipients.
+
+### Routing and current context
+
+Source health exposes `jeremy_email_available`, computed read-only from the real HA service registry plus the existing email account entity. A notify entity's normal `unknown` state is allowed; a missing account or `unavailable` state is not. The template also rechecks account presence. The capability refresh follows the HomeEnergy coordinator; registration can still change between a check and service invocation, so the action is bounded and delivery is never inferred from capability alone.
+
+The peak-import email includes a timestamped current HA snapshot: reported grid import, signed battery power/SOC, inverter status/profile, Orange/Grey EVSE state and thermostat mode/hvac_action. Unknown or unavailable values remain labelled that way. This is not a reconstructed utility interval or proof of current compressor/EV watts. Existing family/persistent actions remain, and their event latch is saved before the email action to prevent restart/timeout duplication. A missing notifier leaves a fixed local persistent notice; the same peak is not repeatedly emailed after recovery.
+
+No destination address is stored in this repository. Routing uses the existing email account with the parent-verified Jeremy default recipient. Changing that account's configured recipient is an operator action, not an automatic discovery decision. Actual inbox delivery remains a separate check; this worker sent no test or alert.
+
+### Utility daily review and bounds
+
+The deployment discovers one enabled SRP Current demand account entry, then requires Demand audit on the same config entry. Renaming account digits is irrelevant; multiple Current demand account candidates or a missing audit refuse ambiguous deployment. Install the compatible SRP audit first. Existing source/entity IDs are preserved.
+
+The review consumes audit state, `last_checked`, `latest_complete_day`, latest daily maximum, exact bounded winning half-hour interval(s), canonical content hash and caveats. It never creates its own utility client, holiday calendar or demand-cost parser. Account E-15 binding must be explicit in the SRP owner; average-demand=true alone cannot distinguish E-15 from E-16. A configured plan is not independently confirmed account enrollment.
+
+A meaningful email candidate requires:
+
+- audit checked within six hours, with no future timestamp and a nonempty canonical hash;
+- the latest completed utility day is yesterday or the prior day, never today/future or an old backfill;
+- state mismatch, or state matches with daily maximum at/above the existing editable 5 kW threshold;
+- local time at/after 10 AM, no attempt already recorded today, and a different day/status/one-decimal daily-max event key from the prior attempt.
+
+New audit states, 10 AM and an hourly reconciliation at minute 15 trigger evaluation. Only the latest completed day is considered; historical arrays are not looped into a message flood at startup. Canonical source hashes detect revisions, but retrieval-only timestamps and nonmaterial row changes do not themselves trigger another email. A material revision can enter a later day's bounded review; a second attempt on the same local day is suppressed.
+
+An incomplete/unsupported/missing/stale audit creates a bounded local persistent diagnostic with no demand-cost email. Each local status/day diagnostic is latched, and reuses a fixed notification ID. Missing utility intervals are never zero. The message separates utility daily/interval checks, derived cycle means and unverified billed dollars. A total bill projection cannot verify the demand-charge component; absent invoice/rate evidence, dollar claims remain unavailable.
+
+Before requesting a daily email, the automation saves its day and material key. That is **attempt intent**, not delivery receipt; it bounds duplicate sends after timeouts or restart. The email action is continue-on-error so failed mail cannot disrupt controls. A local note says the email was requested and delivery is unconfirmed. If the service fails after intent is stored, no automatic resend occurs that day; inspect its trace/log and the local finding rather than silently resending. If capability is missing before intent, findings stay local and a later hourly check may attempt once capability recovers.
+
+The text offers only general discretionary-load timing guidance, labelled as such. Determining a past appliance's contribution requires interval-aligned usable history; unreliable EV CTs, optimistic thermostat states and missing vendor origins remain limitations. No equipment setting or calibrated meter value is changed by this reporting path.

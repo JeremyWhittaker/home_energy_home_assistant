@@ -17,7 +17,7 @@ import {
   validateDashboard,
   verifyCreatedHelperDefaults,
 } from "../src/deployer.mjs";
-import { discoverHomeEnergy, discoveryContract } from "../src/discovery.mjs";
+import { discoverDemandAudit, discoverHomeEnergy, discoveryContract } from "../src/discovery.mjs";
 import {
   evaluatePeakControl,
   isTimeInWindow,
@@ -43,9 +43,13 @@ function fixture() {
   }
   for (const [key, [platform, domain, originalName]] of Object.entries(discoveryContract.sources)) {
     const entityId = `${domain}.${platform}_${slug(originalName)}`;
-    registry.push({ entity_id: entityId, platform, original_name: originalName, disabled_by: null });
+    registry.push({ entity_id: entityId, platform, original_name: originalName, disabled_by: null,
+      ...(platform === "srp_energy_monitor" ? { config_entry_id: "srp-fixture" } : {}) });
     states.push({ entity_id: entityId, state: key.includes("Lifetime") ? "100" : "1000", attributes: {} });
   }
+  registry.push({ entity_id: "sensor.srp_current_demand_fixture", platform: "srp_energy_monitor",
+    original_name: "Current demand", disabled_by: null, config_entry_id: "srp-fixture" });
+  states.push({ entity_id: "sensor.srp_current_demand_fixture", state: "3", attributes: {} });
   for (const entityId of Object.values(discoveryContract.static)) {
     states.push({ entity_id: entityId, state: "off", attributes: {} });
   }
@@ -60,7 +64,7 @@ function fixture() {
 
 test("semantic discovery resolves every calculated, source, and site entity", () => {
   const discovered = discoverHomeEnergy(fixture());
-  assert.equal(Object.keys(discovered.entities).length, 83);
+  assert.equal(Object.keys(discovered.entities).length, 84);
   assert.equal(discovered.entities.peakHoliday, "input_boolean.juicebox_srp_holiday");
   assert.equal(discovered.entities.peakHolidaysOffPeak, "input_boolean.juicebox_srp_holidays_off_peak");
   assert.equal(discovered.entities.peakWindow, "input_boolean.juicebox_srp_on_peak");
@@ -233,6 +237,7 @@ test("alert and HVAC automations are windowed, one-shot, and mode safe", () => {
     "home_energy_eg4_unusable_alert",
     "home_energy_controller_fault_alert",
     "home_energy_profile_mismatch_alert",
+    "home_energy_srp_demand_review",
     "home_energy_peak_hvac_response",
     "home_energy_peak_hvac_override_guard",
     "home_energy_peak_hvac_release",
@@ -444,11 +449,11 @@ class HelperSocket {
 
 test("helper deployment is idempotent", async () => {
   const latches = helperSpecifications.filter((helper) => helper.domain === "input_text");
-  assert.equal(latches.length, 9);
+  assert.equal(latches.length, 12);
   assert.equal(helperSpecifications.some((helper) => "initial" in helper.config), false);
   const socket = new HelperSocket();
   const first = await applyHelpers(socket, helperSpecifications);
-  assert.equal(first.changes.length, 35);
+  assert.equal(first.changes.length, 38);
   const second = await applyHelpers(socket, helperSpecifications);
   assert.equal(second.changes.length, 0);
   const masterCreate = socket.calls.find((call) => call.type === "input_boolean/create"
@@ -730,4 +735,36 @@ test("measurement copy preserves live units and separates current response from 
   const audit = cards.find((card) => card.content?.includes("**Saved response note:**"));
   assert.match(audit.content, /last_changed/);
   assert.doesNotMatch(copy, /8\.105|at least 20 SRP|2% of net energy\./);
+});
+
+
+test("demand audit discovery follows the existing SRP account and refuses ambiguity", () => {
+  const data = fixture();
+  const expected = discoverDemandAudit(data);
+  data.entities.push({ entity_id: "sensor.other_srp_audit", platform: "srp_energy_monitor",
+    original_name: "Demand audit", config_entry_id: "different-entry", disabled_by: null });
+  data.states.push({ entity_id: "sensor.other_srp_audit", state: "matches", attributes: {} });
+  assert.equal(discoverDemandAudit(data), expected);
+  data.entities.push({ entity_id: "sensor.other_srp_current", platform: "srp_energy_monitor",
+    original_name: "Current demand", config_entry_id: "different-entry", disabled_by: null });
+  data.states.push({ entity_id: "sensor.other_srp_current", state: "3", attributes: {} });
+  assert.throws(() => discoverDemandAudit(data), /unambiguous/);
+});
+
+test("demand email preserves existing recipients, controls and bounded attempt intent", () => {
+  const e = discoverHomeEnergy(fixture()).entities;
+  const alerts = buildAutomations(e);
+  const live = alerts.find((a) => a.id === "home_energy_live_peak_import_alert").config;
+  assert.ok(live.actions.some((a) => a.action === "script.notify_family"));
+  assert.match(stableString(live.actions), /email_notifier.send/);
+  assert.match(stableString(live.actions), /current reported states/);
+  const daily = alerts.find((a) => a.id === "home_energy_srp_demand_review").config;
+  assert.match(stableString(daily), /billed|Demand-charge dollars remain unverified/);
+  const sent = daily.actions[0].choose[0].sequence[0].choose[0].sequence;
+  assert.equal(sent[0].action, "input_text.set_value");
+  assert.equal(sent[1].action, "input_text.set_value");
+  assert.equal(sent[2].action, "email_notifier.send");
+  assert.equal(sent[2].data.account, "notify.email_notification_sender_1");
+  assert.equal("to" in sent[2].data, false);
+  assert.doesNotMatch(stableString(daily), /climate.set_temperature|switch.turn|notify_family/);
 });

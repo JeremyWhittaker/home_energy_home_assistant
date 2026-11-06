@@ -591,4 +591,14 @@ class HomeEnergySensor(CoordinatorEntity[HomeEnergyCoordinator], SensorEntity):
             attrs["formula"] = description.formula
         if description.attrs_fn:
             attrs.update(description.attrs_fn(self.coordinator.data))
+        if description.key == "source_health":
+            # Notify entities normally have state unknown even when their
+            # integration is ready. Check the real registry, not has_value.
+            hass = self.coordinator.hass
+            account = hass.states.get("notify.email_notification_sender_1")
+            attrs["jeremy_email_available"] = bool(
+                hass.services.has_service("email_notifier", "send")
+                and account is not None
+                and account.state != "unavailable"
+            )
         return attrs
