@@ -9,5 +9,5 @@
   "issue_tracker": "https://github.com/JeremyWhittaker/home_energy_home_assistant/issues",
   "loggers": ["custom_components.home_energy_monitor"],
   "requirements": [],
-  "version": "0.2.2"
+  "version": "0.2.3"
 }

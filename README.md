@@ -106,6 +106,23 @@ node deploy.mjs --check
 
 The deployer discovers serial-bearing entities semantically, validates every dashboard entity plus every dashboard and automation template against the live server, writes a mode-`0600` backup under `/tmp/home-energy-ha-*`, applies changes transactionally, verifies round trips, and rolls back its site-configuration changes on failure. Tokens are never written to backups.
 
+### Checking a composed Home Energy dashboard
+
+Acceptance checklist for the composition-aware check:
+
+- [x] Keep the seven-view generator and its existing monitoring/template validation authoritative.
+- [x] Recompute a declared composite exactly from fresh supported source-dashboard reads and trusted sibling composition/EG4 modules.
+- [x] Reject unknown additions, edited overlays, metadata drift and unsupported markers without dashboard writes.
+- [x] Keep helper/automation verification and ordinary uncomposed operation unchanged; uncomposed use needs no sibling modules.
+
+`node deploy.mjs --check` recognizes only the declared `x_observability_navigation` schema 1 marker. It first performs the same seven-view entity/card/template validation and helper/automation checks as before. For a declared composite it then reads the exact source dashboards through supported read-only APIs and recomputes the full expected configuration using this repository's current `buildDashboard` output as the base. It loads only the fixed trusted sibling `observability/homeassistant/navigation-composition.mjs` and `eg4_home_assistant/src/deployer.mjs` modules; dashboard content cannot choose an import path or an allowlist. Missing/incompatible dependencies fail clearly. An ordinary uncomposed installation never imports these siblings and retains its original check path/output.
+
+The recomputed full configuration and maintained metadata must match exactly, including imported controls, source/route provenance and generated navigation. Extra views, modified base cards/overlays, stale source snapshots, changed access metadata and unsupported markers fail rather than being ignored. The existing strict EG4 source validator remains active. The final ordinary dashboard roundtrip check reads back that exact composite again. No dashboard, helper, automation, device or Energy-preference write is added to check mode.
+
+For a composed result the check summary reports `dashboard=composed-exact`, separates `base_views`/`base_cards`/`base_entities` from `composed_views`, and counts fresh composition sources. These are source/configuration checks, not physical-device or visual acceptance. This follow-up changes **check mode only**: a normal apply still installs the maintained seven-view base. Run the observability composition check/stage and its required visual review after an owner apply; that tool owns the sidebar composition and rollback. The focused composition-check tests use injected fixture modules, so ordinary development and standalone use do not require sibling checkouts. Actual composite checks do require the trusted siblings.
+
+Validation: all 40 Node tests pass, including 12 focused composite-check regressions. An additional offline run using the actual trusted sibling modules and the parent's saved dashboard snapshot recomputed and matched 39 views from nine source snapshots. That used synthetic entity-presence rows and a saved base, so it does not establish live discovery, device freshness or deployment/visual acceptance.
+
 ## Development checks
 
 ```bash

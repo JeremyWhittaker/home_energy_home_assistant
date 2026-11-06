@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { buildDashboard, dashboardMetadata } from "./src/dashboard.mjs";
+import { resolveCheckDashboard } from "./src/composed-check.mjs";
 import {
   applyAutomations,
   applyDashboard,
@@ -164,8 +165,13 @@ async function main() {
       const automationTemplates = await validateAutomationTemplates(client, automations);
       await verifyHelpers(client);
       await verifyAutomations(client, automations);
-      await verifyDashboard({ ws: client, metadata: dashboardMetadata, candidate });
-      console.log(`check-ok ha=${config.version} entry=${entry.state} dashboard=${plan.action} views=${validation.viewCount} cards=${validation.cardCount} entities=${validation.references.length} dashboard_templates=${dashboardTemplates.templateCount} automation_templates=${automationTemplates.templateCount}`);
+      const checked = await resolveCheckDashboard({ client, baseCandidate: candidate, existing, existingConfig, states: live.states, metadata: dashboardMetadata });
+      await verifyDashboard({ ws: client, metadata: dashboardMetadata, candidate: checked.candidate });
+      if (checked.composed) {
+        console.log(`check-ok ha=${config.version} entry=${entry.state} dashboard=composed-exact base_views=${validation.viewCount} composed_views=${checked.candidate.views.length} base_cards=${validation.cardCount} base_entities=${validation.references.length} dashboard_templates=${dashboardTemplates.templateCount} automation_templates=${automationTemplates.templateCount} composition_sources=${checked.sourceCount}`);
+      } else {
+        console.log(`check-ok ha=${config.version} entry=${entry.state} dashboard=${plan.action} views=${validation.viewCount} cards=${validation.cardCount} entities=${validation.references.length} dashboard_templates=${dashboardTemplates.templateCount} automation_templates=${automationTemplates.templateCount}`);
+      }
       return;
     }
 
