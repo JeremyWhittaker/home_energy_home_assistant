@@ -464,7 +464,7 @@ The two EG4 batteries provide roughly **28 kWh nominal** and feed the backup pan
           badge(e.gridNetPower, "Live grid net", "mdi:transmission-tower"),
           badge(e.gridReconciliationMatches, "Meter comparison", "mdi:scale-balance"),
           badge(e.srpIntegrationAvailable, "SRP feed", "mdi:cloud-check-outline"),
-          badge(e.srpBilledCyclePeak, "Cycle peak", "mdi:chart-timeline-variant"),
+          badge(e.srpBilledCyclePeak, "Reported maximum", "mdi:chart-timeline-variant"),
         ],
         sections: [
           {
@@ -507,11 +507,25 @@ The two EG4 batteries provide roughly **28 kWh nominal** and feed the backup pan
                 ],
                 grid_options: { columns: "full", rows: 5 },
               },
-              heading("SRP billing context", "mdi:finance", "subtitle"),
+              markdown("This comparison uses SRP's signed **net** intervals; the separate production and usage fields are not independent meters for either solar array."),
+            ],
+          },
+          {
+            type: "grid",
+            cards: [
+              heading("Demand & billing", "mdi:finance"),
+              ...(e.srpDemandAudit ? [{
+                ...tile(e.srpDemandAudit, "Daily demand check", "mdi:check-decagram-outline", 12),
+                tap_action: { action: "more-info" },
+                icon_tap_action: { action: "more-info" },
+              }] : []),
+              markdown(e.srpDemandAudit
+                ? "The demand check compares SRP's daily maximum with its half-hour readings. Missing readings stay incomplete. Tap the check for the date and winning half-hour."
+                : "The demand check is unavailable. Open SRP detail to review its data."),
               tile(e.srpCurrentDemand, "Current-cycle demand · delayed", "mdi:gauge"),
-              tile(e.srpBilledCyclePeak, "Billed cycle peak · delayed", "mdi:chart-line"),
+              tile(e.srpBilledCyclePeak, "Reported cycle maximum · delayed", "mdi:chart-line"),
               tile(e.srpBillProjection, "Bill projection · delayed", "mdi:cash-clock", 12),
-              markdown(`The utility bill is delayed. This comparison uses SRP's signed **net** intervals; the separate production and usage fields are not treated as independent meters for either solar array. [Open SRP detail](/srp-energy)`),
+              markdown("The cycle maximum and average daily demand are different measures. Billed dollar line items are not imported; the projection estimates the whole bill, not the demand charge. [Open SRP detail](/srp-energy)"),
             ],
           },
         ],
@@ -550,7 +564,7 @@ A schedule readback confirms settings. Check the battery and grid graphs to veri
               tile(e.peakMinutesRemaining, "Minutes left in peak window", "mdi:timer-sand"),
               tile(e.batteryMinutesToReserve, "Conservative minutes to reserve", "mdi:battery-clock-outline"),
               tile(e.gridImportPower, "Live grid import", "mdi:transmission-tower-import"),
-              tile(e.srpBilledCyclePeak, "SRP billed peak · delayed", "mdi:chart-timeline-variant"),
+              tile(e.srpBilledCyclePeak, "SRP cycle maximum · delayed", "mdi:chart-timeline-variant"),
               {
                 type: "history-graph",
                 title: "Demand-defense signals · 12 hours",

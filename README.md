@@ -18,7 +18,13 @@ Views:
 - **Peak Controls:** `/home-energy/peak-controls`
 - Diagnostics: `/home-energy/diagnostics`
 
-The existing **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)** page remains a separate equipment page. Enphase and Tigo keep their own detailed pages as well.
+**Grid & SRP** separates live grid exchange, daily net-meter comparison and demand/billing.
+Its Daily demand check compares SRP's daily maximum with half-hour readings; missing evidence
+stays incomplete. Tap the tile for the date and winning half-hour. Reported cycle maximum is
+labelled separately from current-cycle demand. Actual bill dollar line items are not imported;
+the total bill projection is not a demand-charge amount.
+
+On this installation, the observability owner composes EG4, Enphase, Tigo, SRP and charging details inside Home Energy. Their original direct URLs, including **[EG4 Solar & Battery](http://172.16.106.12:8123/eg4-energy/live)**, remain available. Each equipment project retains its own source configuration.
 
 The dedicated [EG4 project](https://github.com/JeremyWhittaker/eg4_home_assistant) owns inverter and battery detail. This project combines EG4 with the separate Enphase array and utility data. On November 4 the local dongle readings were unavailable; cloud readings supplied the working EG4 monitoring and seasonal controller.
 

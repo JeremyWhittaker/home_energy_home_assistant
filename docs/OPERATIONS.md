@@ -15,6 +15,25 @@ Every model entity includes `classification`, `calculation_version`, and `measur
 
 Configure demand response on **Home Energy → Peak Controls** (`/home-energy/peak-controls`). Editing helpers there does not require a redeploy. The automatic A/C response master is separate from the alert automations, so the page continues to forecast and alert while thermostat control is off.
 
+## Dashboard ownership and composed navigation
+
+The HomeEnergy owner generates seven base views. On a composed installation, an ordinary
+owner apply still installs that base; afterward use the observability owner's composition
+check/stage to restore the combined sections from fresh owner dashboards. Verify the resulting
+configuration and desktop/mobile rendering before hiding old sidebar entries. Do not hand-edit
+the combined dashboard as another source of truth.
+
+`node deploy.mjs --check` recognizes a declared composition and recomputes its entire expected
+configuration, source provenance and metadata through supported read-only queries. It rejects
+drift without changing the dashboard. It does not itself recompose, deploy or establish visual
+or physical-device acceptance. Uncomposed installations retain the normal seven-view check.
+
+Grid & SRP includes the discovered SRP **Demand audit** as a read-only Daily demand check tile.
+Tap it for the completed date, daily/half-hour maxima and winning interval. Missing evidence is
+incomplete, and unsupported plans remain unsupported. A reported cycle maximum is separate
+from an average of daily maxima. Actual billed-dollar line items are not imported; the bill
+projection is a total estimate, not a demand charge.
+
 ## Peak Controls operation
 
 Use this order when commissioning or changing the rule:
@@ -136,10 +155,12 @@ the last actual change only after checking the original inverter identity and
 weekly-table integrity. Routine no-change verification retains that undo record.
 Turning control off alone leaves the applied schedule active; it is not rollback.
 
-After a component update, preserve an exact private copy of the affected files,
+Before a component update, preserve an exact private copy of the affected files,
 check HA configuration, restart through the supported Core service, and require
-the same config entry to return loaded with version 0.2.1 and the new switch and
-sensors. Compare file hashes as well as fresh states before claiming deployment.
+Core to return RUNNING and the same config entry to return loaded with backend version 0.2.3
+and its expected switch and sensors. SRP demand-audit support uses SRP 1.2.4. Compare file hashes
+as well as fresh states before claiming deployment, then follow the owner/recomposition process
+above for dashboard changes.
 Do not use a privileged installer when an owned in-place update is sufficient.
 
 
